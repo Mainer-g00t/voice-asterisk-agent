@@ -1,0 +1,33 @@
+services:
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    container_name: agent
+    env_file: .env
+    ports:
+      - "9099:9099"
+    networks:
+      - voiceai
+    restart: unless-stopped
+
+  asterisk:
+    image: andrius/asterisk:18
+    container_name: asterisk
+    ports:
+      - "5060:5060/udp"
+      - "10000-10100:10000-10100/udp"
+    volumes:
+      - ./asterisk/pjsip.conf:/etc/asterisk/pjsip.conf:ro
+      - ./asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
+      - ./asterisk/rtp.conf:/etc/asterisk/rtp.conf:ro
+      - ./asterisk/logger.conf:/etc/asterisk/logger.conf:ro
+    networks:
+      - voiceai
+    depends_on:
+      - agent
+    restart: unless-stopped
+
+networks:
+  voiceai:
+    driver: bridge
