@@ -52,7 +52,9 @@ def _build_llm():
         from pipecat.services.ollama.llm import OLLamaLLMService
         return OLLamaLLMService(
             base_url="http://llm:11434/v1",
-            model=os.environ.get("OLLAMA_MODEL", "smollm2:135m"),
+            settings=OLLamaLLMService.Settings(
+                model=os.environ.get("OLLAMA_MODEL", "smollm2:135m"),
+            ),
         )
     elif provider == "openai":
         from pipecat.services.openai.llm import OpenAILLMService
@@ -77,8 +79,8 @@ def _build_tts():
         return OpenAITTSService(
             api_key="local",
             base_url="http://tts:5000/v1",
-            voice="default",
-            sample_rate=AGENT_SAMPLE_RATE,
+            settings=OpenAITTSService.Settings(voice="default"),
+            sample_rate=24_000,  # local TTS server resamples Piper output to 24 kHz
         )
     elif provider == "openai":
         from pipecat.services.openai.tts import OpenAITTSService

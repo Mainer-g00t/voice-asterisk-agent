@@ -1,3 +1,5 @@
 fastapi>=0.111
 uvicorn>=0.29
 piper-tts>=1.2
+scipy>=1.13
+numpy>=1.26
