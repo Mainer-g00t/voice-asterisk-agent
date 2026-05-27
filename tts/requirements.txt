@@ -1,0 +1,3 @@
+fastapi>=0.111
+uvicorn>=0.29
+piper-tts>=1.2
