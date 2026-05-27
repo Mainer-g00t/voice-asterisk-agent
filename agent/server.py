@@ -64,9 +64,12 @@ async def handle_call(
         )
     )
 
-    await transport.connect(reader, writer, call_uuid)
-
+    # Create the pipeline BEFORE connecting so that event handlers registered
+    # inside create_pipeline_task (e.g. on_client_connected) are in place
+    # before transport.connect() fires them.
     task = await create_pipeline_task(transport)
+
+    await transport.connect(reader, writer, call_uuid)
 
     # handle_sigint=False: only the outer process should handle SIGINT
     runner = PipelineRunner(handle_sigint=False)

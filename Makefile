@@ -1,4 +1,4 @@
-.PHONY: pull up down logs restart cli shell
+.PHONY: pull up down logs logs-agent logs-tts logs-llm logs-stt logs-asterisk restart cli shell
 
 # Pull latest code + updated base images
 pull:
@@ -13,9 +13,25 @@ up:
 down:
 	docker compose down
 
-# Stream logs from both services (Ctrl-C to exit)
+# Stream logs from all services — last 50 lines per service then follow (Ctrl-C to exit)
 logs:
-	docker compose logs -f
+	docker compose logs -f --tail=50
+
+# Stream logs from a single service: make logs-agent | logs-tts | logs-llm | logs-stt | logs-asterisk
+logs-agent:
+	docker compose logs -f --tail=50 agent
+
+logs-tts:
+	docker compose logs -f --tail=50 tts
+
+logs-llm:
+	docker compose logs -f --tail=50 llm
+
+logs-stt:
+	docker compose logs -f --tail=50 stt
+
+logs-asterisk:
+	docker compose logs -f --tail=50 asterisk
 
 # Rebuild and restart only the agent (faster than full `make up`)
 restart:

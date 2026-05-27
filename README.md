@@ -18,7 +18,8 @@ as a first-class Pipecat transport.
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (macOS)
 - A SIP softphone: [Linphone](https://www.linphone.org/) (free) or macOS [Telephone.app](https://telephone-app.com/)
-- API keys: Deepgram (STT), Anthropic (LLM), Cartesia (TTS)
+
+No cloud API keys required — everything runs locally by default.
 
 ---
 
@@ -29,11 +30,10 @@ as a first-class Pipecat transport.
 git clone https://github.com/<you>/voice-asterisk-agent.git
 cd voice-asterisk-agent
 
-# 2. Fill in API keys
+# 2. Copy env (no keys needed for local mode)
 cp .env.example .env
-# edit .env and add your DEEPGRAM_API_KEY, ANTHROPIC_API_KEY, CARTESIA_API_KEY
 
-# 3. Start
+# 3. Build and start
 make up
 
 # 4. Watch logs
@@ -60,6 +60,61 @@ Dial **any number** (e.g. `1000`) — the dialplan matches everything and routes
 
 ---
 
+## AI providers
+
+The pipeline selects providers via environment variables in `.env`:
+
+```env
+STT_PROVIDER=local      # local | deepgram | openai
+LLM_PROVIDER=local      # local | anthropic | openai
+TTS_PROVIDER=local      # local | cartesia  | openai
+```
+
+### Local (default — no API keys needed)
+
+| Service | Technology | Container |
+|---------|-----------|-----------|
+| STT | Whisper (via faster-whisper) | `stt` |
+| LLM | Ollama — `smollm2:135m` by default | `llm` |
+| TTS | Piper TTS — `en_US-amy-low` voice | `tts` |
+
+To use a different Ollama model:
+
+```env
+OLLAMA_MODEL=llama3.2:3b
+```
+
+Pull it before starting:
+
+```bash
+docker compose exec llm ollama pull llama3.2:3b
+```
+
+### Cloud providers
+
+Add the relevant keys to `.env` and set the provider:
+
+```env
+STT_PROVIDER=deepgram
+DEEPGRAM_API_KEY=...
+
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=...
+
+TTS_PROVIDER=cartesia
+CARTESIA_API_KEY=...
+```
+
+Supported options per service:
+
+| Variable | Options |
+|----------|---------|
+| `STT_PROVIDER` | `local`, `deepgram`, `openai` |
+| `LLM_PROVIDER` | `local`, `anthropic`, `openai` |
+| `TTS_PROVIDER` | `local`, `cartesia`, `openai` |
+
+---
+
 ## Workflow across laptops
 
 ```bash
@@ -72,26 +127,24 @@ make up     # docker compose up --build -d
 ## Useful commands
 
 ```bash
-make logs     # stream logs from both services
-make cli      # open Asterisk CLI (pjsip show endpoints, dialplan show)
-make shell    # bash inside the agent container
-make restart  # rebuild + restart only the agent (faster iteration)
-make down     # stop everything
+make logs           # stream logs from all services (last 50 lines each)
+make logs-agent     # stream agent logs only
+make logs-tts       # stream TTS logs only
+make logs-llm       # stream Ollama LLM logs only
+make logs-stt       # stream Whisper STT logs only
+make logs-asterisk  # stream Asterisk logs only
+make cli            # open Asterisk CLI (pjsip show endpoints, dialplan show)
+make shell          # bash inside the agent container
+make restart        # rebuild + restart only the agent (faster iteration)
+make down           # stop everything
 ```
-
----
-
-## Swapping AI providers
-
-The pipeline in [`agent/pipeline.py`](agent/pipeline.py) uses Deepgram + Anthropic + Cartesia by default.
-Pipecat supports many providers — swap the service imports and update `.env` accordingly.
-The `AudioSocketTransport` is provider-agnostic; no changes needed there.
 
 ---
 
 ## Architecture notes
 
 - **One pipeline per call**: `server.py` creates a fresh `AudioSocketTransport` and Pipecat `PipelineTask` for every incoming TCP connection. Calls are fully isolated.
-- **Audio resampling**: Asterisk sends 8 kHz PCM; the transport resamples to 16 kHz for STT (and back to 8 kHz for output) using SOXR.
+- **Audio resampling**: Asterisk sends/receives 8 kHz PCM. The transport resamples to 16 kHz for the STT pipeline (using SOXR). The local Piper TTS outputs 16 kHz which is upsampled to 24 kHz (required by Pipecat's `OpenAITTSService`) using scipy before being downsampled back to 8 kHz for Asterisk.
+- **VAD**: Silero VAD (via PyTorch CPU) is used for end-of-speech detection.
 - **Asterisk image**: `andrius/asterisk:18` — ships `app_audiosocket` and `chan_pjsip`. Verify with `make cli` → `module show like audiosocket`.
 - **macOS Docker note**: UDP ports are forwarded through the Docker Desktop VM. The RTP range is intentionally narrow (10000–10100) to keep port mapping fast.

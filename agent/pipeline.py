@@ -79,7 +79,7 @@ def _build_tts():
         return OpenAITTSService(
             api_key="local",
             base_url="http://tts:5000/v1",
-            settings=OpenAITTSService.Settings(voice="default"),
+            settings=OpenAITTSService.Settings(voice="alloy"),  # local Piper ignores voice name; must pass a valid OpenAI voice to satisfy Pipecat validation
             sample_rate=24_000,  # local TTS server resamples Piper output to 24 kHz
         )
     elif provider == "openai":
