@@ -47,14 +47,21 @@ services:
   # ── Asterisk PBX ──────────────────────────────────────────────────────────────
 
   asterisk:
-    image: andrius/asterisk:18
+    build:
+      context: ./asterisk
+      dockerfile: Dockerfile
     platform: linux/amd64
     container_name: asterisk
+    environment:
+      # IP that baresip uses to reach Asterisk's RTP ports (Docker port mappings).
+      # Defaults to 127.0.0.1 — works when baresip and Docker run on the same machine.
+      # Override in .env if baresip is on a different host: ASTERISK_EXTERNAL_IP=192.168.x.x
+      ASTERISK_EXTERNAL_IP: ${ASTERISK_EXTERNAL_IP:-127.0.0.1}
     ports:
       - "5060:5060/udp"
       - "10000-10100:10000-10100/udp"
     volumes:
-      - ./asterisk/pjsip.conf:/etc/asterisk/pjsip.conf:ro
+      - ./asterisk/pjsip.conf:/etc/asterisk/pjsip.conf.tmpl:ro
       - ./asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
       - ./asterisk/rtp.conf:/etc/asterisk/rtp.conf:ro
       - ./asterisk/logger.conf:/etc/asterisk/logger.conf:ro
