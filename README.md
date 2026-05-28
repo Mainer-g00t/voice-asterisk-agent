@@ -63,6 +63,32 @@ Dial **any number** (e.g. `1000`) — the dialplan matches everything and routes
 
 ---
 
+## Agent modes
+
+Set `AGENT_MODE` in `.env` to switch the conversation behaviour without touching any code:
+
+```env
+AGENT_MODE=basic   # basic | customer_service | storyteller | language_tutor
+```
+
+| Mode | What it does | Opening line |
+|------|-------------|--------------|
+| `basic` *(default)* | Open-ended Q&A assistant | *"How can I help you today?"* |
+| `customer_service` | Guided tech-support flow — collects issue, troubleshoots step by step, offers escalation | *"Thank you for calling support…"* |
+| `storyteller` | Collaborative story — bot opens a scene, then caller and bot take turns one or two sentences each | *"A traveller arrived at the edge of a strange forest…"* |
+| `language_tutor` | English conversation practice — gentle inline corrections, keeps the student talking | *"What would you like to talk about today?"* |
+
+Restart the agent container after changing the mode:
+
+```bash
+make restart   # or: docker compose restart agent
+```
+
+Each agent lives in `agent/agents/<mode>.py` and only defines a `SYSTEM_PROMPT` and a `GREETING_TRIGGER`.
+Adding your own agent is as simple as dropping a new file in that directory and wiring it up in `pipeline.py`.
+
+---
+
 ## AI providers
 
 The pipeline selects providers via environment variables in `.env`:

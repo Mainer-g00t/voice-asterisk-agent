@@ -6,10 +6,14 @@ Providers are selected via environment variables:
   LLM_PROVIDER = local (default) | anthropic | openai
   TTS_PROVIDER = local (default) | cartesia | openai
 
+Agent behaviour is selected via:
+  AGENT_MODE   = basic (default) | customer_service | storyteller | language_tutor
+
 "local" points to the stt/llm/tts Docker services in docker-compose.yml.
 Set the corresponding API key(s) in .env for cloud providers.
 """
 
+import importlib
 import os
 
 from loguru import logger
@@ -25,13 +29,26 @@ from pipecat.processors.aggregators.llm_response_universal import (
 
 from transport.audiosocket import AGENT_SAMPLE_RATE, AudioSocketParams, AudioSocketTransport
 
-SYSTEM_PROMPT = (
-    "You are a helpful voice assistant. Your responses will be spoken aloud "
-    "over a phone call. Keep answers short and conversational — two or three "
-    "sentences maximum. Avoid bullet points, markdown, or anything that "
-    "doesn't speak naturally."
-)
+# ── Agent mode selection ──────────────────────────────────────────────────────
 
+_AGENTS = {
+    "basic":            "agents.basic",
+    "customer_service": "agents.customer_service",
+    "storyteller":      "agents.storyteller",
+    "language_tutor":   "agents.language_tutor",
+}
+
+_mode = os.environ.get("AGENT_MODE", "basic").lower()
+if _mode not in _AGENTS:
+    logger.warning(f"Unknown AGENT_MODE={_mode!r}, falling back to 'basic'")
+    _mode = "basic"
+
+_agent = importlib.import_module(_AGENTS[_mode])
+SYSTEM_PROMPT: str = _agent.SYSTEM_PROMPT
+GREETING_TRIGGER: str = getattr(_agent, "GREETING_TRIGGER", "Hello")
+
+
+# ── Provider builders ─────────────────────────────────────────────────────────
 
 def _build_stt():
     provider = os.environ.get("STT_PROVIDER", "local").lower()
@@ -100,13 +117,16 @@ def _build_tts():
         )
 
 
+# ── Pipeline factory ──────────────────────────────────────────────────────────
+
 async def create_pipeline_task(transport: AudioSocketTransport) -> PipelineTask:
     stt = _build_stt()
     llm = _build_llm()
     tts = _build_tts()
 
     logger.info(
-        f"Pipeline: STT={os.environ.get('STT_PROVIDER', 'local')} "
+        f"Pipeline: agent={_mode} "
+        f"STT={os.environ.get('STT_PROVIDER', 'local')} "
         f"LLM={os.environ.get('LLM_PROVIDER', 'local')} "
         f"TTS={os.environ.get('TTS_PROVIDER', 'local')}"
     )
@@ -143,7 +163,7 @@ async def create_pipeline_task(transport: AudioSocketTransport) -> PipelineTask:
     @transport.event_handler("on_client_connected")
     async def on_connected(t, call_uuid: str) -> None:
         logger.info(f"Pipeline started for call {call_uuid}")
-        context.add_message({"role": "user", "content": "Hello"})
+        context.add_message({"role": "user", "content": GREETING_TRIGGER})
         await task.queue_frames([LLMContextFrame(context)])
 
     @transport.event_handler("on_client_disconnected")
