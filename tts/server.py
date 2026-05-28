@@ -23,7 +23,7 @@ from scipy import signal
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-TARGET_SAMPLE_RATE = 24_000  # Hz expected by Pipecat's OpenAITTSService
+TARGET_SAMPLE_RATE = 24_000  # Hz — Pipecat's OpenAITTSService requires 24 kHz
 
 MODEL_PATH = "/models/voice.onnx"
 CONFIG_PATH = "/models/voice.onnx.json"

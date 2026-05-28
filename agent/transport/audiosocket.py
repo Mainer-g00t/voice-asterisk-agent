@@ -101,6 +101,7 @@ class AudioSocketInputTransport(BaseInputTransport):
             self._read_task = None
 
     async def _read_loop(self) -> None:
+        audio_frames_received = 0
         try:
             while True:
                 msg_type, payload = await read_frame(self._reader)
@@ -119,6 +120,12 @@ class AudioSocketInputTransport(BaseInputTransport):
                     logger.debug(f"DTMF digit: {digit!r} (call {self._call_uuid})")
 
                 elif msg_type == MSG_AUDIO:
+                    audio_frames_received += 1
+                    if audio_frames_received == 1:
+                        logger.info(f"First audio frame received from Asterisk ({len(payload)} bytes)")
+                    elif audio_frames_received % 200 == 0:  # every ~4s at 50fps
+                        logger.info(f"Audio frames received so far: {audio_frames_received}")
+
                     resampled = await self._resampler.resample(
                         payload, ASTERISK_SAMPLE_RATE, AGENT_SAMPLE_RATE
                     )
@@ -167,7 +174,17 @@ class AudioSocketOutputTransport(BaseOutputTransport):
             downsampled = await self._resampler.resample(
                 frame.audio, frame.sample_rate, ASTERISK_SAMPLE_RATE
             )
-            await write_frame(self._writer, MSG_AUDIO, downsampled)
+            # Pipecat's audio task has no pacing — it dumps frames as fast as the queue
+            # empties. Asterisk's AudioSocket channel has a fixed internal frame queue;
+            # receiving a burst overflows it and drops frames (choppy audio). Pace each
+            # 20ms chunk at real-time so Asterisk receives audio at the rate it plays it.
+            chunk_size = int(ASTERISK_SAMPLE_RATE * 0.020) * 2  # 320 bytes = 20ms at 8 kHz
+            for i in range(0, len(downsampled), chunk_size):
+                chunk = downsampled[i:i + chunk_size]
+                header = struct.pack(HEADER_FMT, MSG_AUDIO, len(chunk))
+                self._writer.write(header + chunk)
+                await self._writer.drain()
+                await asyncio.sleep(0.020)
             return True
         except (ConnectionResetError, BrokenPipeError) as e:
             logger.warning(f"AudioSocket write failed: {e}")

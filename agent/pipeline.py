@@ -80,7 +80,7 @@ def _build_tts():
             api_key="local",
             base_url="http://tts:5000/v1",
             settings=OpenAITTSService.Settings(voice="alloy"),  # local Piper ignores voice name; must pass a valid OpenAI voice to satisfy Pipecat validation
-            sample_rate=24_000,  # local TTS server resamples Piper output to 24 kHz
+            sample_rate=24_000,  # Pipecat's OpenAITTSService requires 24 kHz
         )
     elif provider == "openai":
         from pipecat.services.openai.tts import OpenAITTSService
@@ -136,6 +136,8 @@ async def create_pipeline_task(transport: AudioSocketTransport) -> PipelineTask:
             audio_in_sample_rate=AGENT_SAMPLE_RATE,
             audio_out_sample_rate=AGENT_SAMPLE_RATE,
         ),
+        enable_rtvi=False,       # no RTVI client — avoids injecting RTVIProcessor
+        idle_timeout_secs=None,  # calls end via hangup (EndFrame), not inactivity
     )
 
     @transport.event_handler("on_client_connected")

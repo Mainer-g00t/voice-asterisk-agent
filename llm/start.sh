@@ -13,6 +13,11 @@ done
 
 echo "Pulling $MODEL..."
 ollama pull "$MODEL"
-echo "Model ready."
+
+echo "Warming up $MODEL..."
+curl -sf http://localhost:11434/api/generate \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"hi\",\"stream\":false}" \
+  > /dev/null
+echo "Model warm and ready."
 
 wait $OLLAMA_PID

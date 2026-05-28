@@ -79,8 +79,11 @@ async def handle_call(
         logger.error(f"Pipeline error for call {call_uuid}: {e}")
     finally:
         await transport.disconnect(call_uuid)
-        writer.close()
-        await writer.wait_closed()
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # remote side already closed the connection
         logger.info(f"Call {call_uuid} finished")
 
 
