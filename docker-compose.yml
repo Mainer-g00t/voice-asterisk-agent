@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: voiceai
       POSTGRES_USER: voiceai
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-voiceai_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./config-api/migrations:/docker-entrypoint-initdb.d:ro
@@ -45,7 +45,7 @@ services:
     container_name: config-api
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://voiceai:${POSTGRES_PASSWORD:-voiceai_dev}@postgres:5432/voiceai
+      DATABASE_URL: postgresql://voiceai:${POSTGRES_PASSWORD}@postgres:5432/voiceai
       REDIS_URL: redis://redis:6379/0
     ports:
       - "8080:8080"
