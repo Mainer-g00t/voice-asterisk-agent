@@ -228,7 +228,7 @@ async def create_pipeline_task(
     tools_schema = _build_tools_schema(tool_configs)
     context = LLMContext(
         messages=[{"role": "system", "content": system_prompt}],
-        tools=tools_schema,
+        **( {"tools": tools_schema} if tools_schema is not None else {} ),
     )
     aggregators = LLMContextAggregatorPair(
         context,
