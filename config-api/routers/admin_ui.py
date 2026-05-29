@@ -97,6 +97,41 @@ async def delete_route(request: Request, route_id: str):
     return RedirectResponse("/admin/routes?flash=Route+deleted", status_code=303)
 
 
+# ── Call history UI ───────────────────────────────────────────────────────────
+
+@router.get("/calls", response_class=HTMLResponse)
+async def calls_list(request: Request):
+    import json as _json
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT call_uuid, agent_slug, did, started_at, ended_at,
+                      duration_seconds, turn_count, stt_provider, llm_provider,
+                      tts_provider, end_reason
+               FROM call_logs ORDER BY started_at DESC NULLS LAST LIMIT 50"""
+        )
+        total = await conn.fetchval("SELECT COUNT(*) FROM call_logs")
+    return templates.TemplateResponse(
+        request,
+        "calls/list.html",
+        {"calls": [dict(r) for r in rows], "total": total},
+    )
+
+
+@router.get("/calls/{call_uuid}", response_class=HTMLResponse)
+async def call_detail(request: Request, call_uuid: str):
+    import json as _json
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM call_logs WHERE call_uuid=$1", call_uuid)
+    if not row:
+        return RedirectResponse("/admin/calls")
+    call = dict(row)
+    if isinstance(call.get("transcript"), str):
+        call["transcript"] = _json.loads(call["transcript"])
+    return templates.TemplateResponse(request, "calls/detail.html", {"call": call})
+
+
 @router.get("/agents", response_class=HTMLResponse)
 async def agents_list(request: Request):
     agents = await db.list_agents()

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Call History — Voice Agent Admin{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">Call History <span class="text-muted fs-6 fw-normal">{{ total }} total</span></h4>
+</div>
+
+{% if not calls %}
+<div class="text-muted">No calls recorded yet.</div>
+{% else %}
+<div class="card shadow-sm">
+  <table class="table table-hover mb-0">
+    <thead class="table-light">
+      <tr>
+        <th>Time</th>
+        <th>DID</th>
+        <th>Agent</th>
+        <th>Duration</th>
+        <th>Turns</th>
+        <th>Providers</th>
+        <th>Reason</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in calls %}
+      <tr>
+        <td class="text-muted small text-nowrap">
+          {{ c.started_at.strftime('%m-%d %H:%M') if c.started_at else '—' }}
+        </td>
+        <td><code>{{ c.did or '—' }}</code></td>
+        <td>
+          <a href="/admin/agents/{{ c.agent_slug }}/edit" class="text-decoration-none">
+            {{ c.agent_slug }}
+          </a>
+        </td>
+        <td>
+          {% if c.duration_seconds is not none %}
+            {% set m = (c.duration_seconds // 60) %}
+            {% set s = (c.duration_seconds % 60) %}
+            {{ '%d:%02d'|format(m, s) }}
+          {% else %}—{% endif %}
+        </td>
+        <td class="text-center">{{ c.turn_count }}</td>
+        <td class="text-muted small">
+          {{ c.stt_provider or '?' }} /
+          {{ c.llm_provider or '?' }} /
+          {{ c.tts_provider or '?' }}
+        </td>
+        <td>
+          <span class="badge {% if c.end_reason == 'hangup' %}bg-secondary{% elif c.end_reason == 'error' %}bg-danger{% else %}bg-light text-dark{% endif %}">
+            {{ c.end_reason or '?' }}
+          </span>
+        </td>
+        <td>
+          <a href="/admin/calls/{{ c.call_uuid }}" class="btn btn-outline-secondary btn-sm">
+            Transcript
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if total > 50 %}
+<div class="text-muted small mt-2">Showing last 50 calls.</div>
+{% endif %}
+{% endif %}
+
+{% endblock %}

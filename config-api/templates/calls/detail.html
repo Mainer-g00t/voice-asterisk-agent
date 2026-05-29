@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Call {{ call.call_uuid[:8] }}… — Voice Agent Admin{% endblock %}
+{% block content %}
+
+<div class="d-flex align-items-center gap-2 mb-3">
+  <a href="/admin/calls" class="text-decoration-none text-muted">← Calls</a>
+  <span class="text-muted">/</span>
+  <h5 class="mb-0 font-monospace">{{ call.call_uuid }}</h5>
+</div>
+
+<div class="row g-4">
+
+  <!-- Metadata -->
+  <div class="col-lg-4">
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">Call details</div>
+      <table class="table table-sm mb-0">
+        <tr><th class="text-muted fw-normal ps-3">Agent</th>
+            <td><a href="/admin/agents/{{ call.agent_slug }}/edit">{{ call.agent_slug }}</a></td></tr>
+        <tr><th class="text-muted fw-normal ps-3">DID</th>
+            <td><code>{{ call.did or '—' }}</code></td></tr>
+        <tr><th class="text-muted fw-normal ps-3">Started</th>
+            <td class="small">{{ call.started_at.strftime('%Y-%m-%d %H:%M:%S') if call.started_at else '—' }}</td></tr>
+        <tr><th class="text-muted fw-normal ps-3">Ended</th>
+            <td class="small">{{ call.ended_at.strftime('%Y-%m-%d %H:%M:%S') if call.ended_at else '—' }}</td></tr>
+        <tr><th class="text-muted fw-normal ps-3">Duration</th>
+            <td>
+              {% if call.duration_seconds is not none %}
+                {% set m = (call.duration_seconds // 60) %}
+                {% set s = (call.duration_seconds % 60) %}
+                {{ '%d:%02d'|format(m, s) }}
+              {% else %}—{% endif %}
+            </td></tr>
+        <tr><th class="text-muted fw-normal ps-3">Turns</th>
+            <td>{{ call.turn_count }}</td></tr>
+        <tr><th class="text-muted fw-normal ps-3">End reason</th>
+            <td>
+              <span class="badge {% if call.end_reason == 'hangup' %}bg-secondary{% elif call.end_reason == 'error' %}bg-danger{% else %}bg-light text-dark{% endif %}">
+                {{ call.end_reason or '?' }}
+              </span>
+            </td></tr>
+        <tr><th class="text-muted fw-normal ps-3">STT</th><td>{{ call.stt_provider or '—' }}</td></tr>
+        <tr><th class="text-muted fw-normal ps-3">LLM</th><td>{{ call.llm_provider or '—' }}</td></tr>
+        <tr><th class="text-muted fw-normal ps-3">TTS</th><td>{{ call.tts_provider or '—' }}</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- Transcript -->
+  <div class="col-lg-8">
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Transcript</div>
+      <div class="card-body" style="max-height:70vh; overflow-y:auto;">
+        {% if call.transcript %}
+          {% for msg in call.transcript %}
+          <div class="d-flex mb-3 {% if msg.role == 'assistant' %}flex-row-reverse{% endif %}">
+            <div class="px-3 py-2 rounded-3 {% if msg.role == 'user' %}bg-light{% else %}bg-primary text-white{% endif %}"
+                 style="max-width:80%; font-size:0.9rem;">
+              <div class="fw-semibold small mb-1 opacity-75">
+                {{ '🧑 Caller' if msg.role == 'user' else '🤖 Agent' }}
+              </div>
+              {{ msg.content }}
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="text-muted">No transcript recorded.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

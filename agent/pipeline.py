@@ -29,6 +29,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 
+from call_logger import CallLogger
 from transport.audiosocket import AGENT_SAMPLE_RATE, AudioSocketParams, AudioSocketTransport
 
 # ── Redis client (shared across calls) ───────────────────────────────────────
@@ -191,7 +192,9 @@ def _register_tools(llm, tool_configs: list[dict], agent_config: dict) -> None:
 
 # ── Pipeline factory ──────────────────────────────────────────────────────────
 
-async def create_pipeline_task(transport: AudioSocketTransport, call_uuid: str) -> PipelineTask:
+async def create_pipeline_task(
+    transport: AudioSocketTransport, call_uuid: str
+) -> tuple[PipelineTask, CallLogger]:
     slug = os.environ.get("AGENT_SLUG", "basic")
     config = await _load_agent_config(slug)
 
@@ -206,6 +209,14 @@ async def create_pipeline_task(transport: AudioSocketTransport, call_uuid: str) 
 
     if tool_configs:
         _register_tools(llm, tool_configs, config)
+
+    call_log = CallLogger(
+        call_uuid=call_uuid,
+        agent_slug=slug,
+        providers=providers,
+        config_api_url=os.environ.get("CONFIG_API_URL", "http://config-api:8080"),
+        greeting_trigger=greeting_trigger,
+    )
 
     logger.info(
         f"Pipeline: agent={slug} call={call_uuid} "
@@ -250,12 +261,14 @@ async def create_pipeline_task(transport: AudioSocketTransport, call_uuid: str) 
     @transport.event_handler("on_client_connected")
     async def on_connected(t, uuid: str) -> None:
         logger.info(f"Pipeline started for call {uuid}")
+        call_log.on_connected(context)
         context.add_message({"role": "user", "content": greeting_trigger})
         await task.queue_frames([LLMContextFrame(context)])
 
     @transport.event_handler("on_client_disconnected")
     async def on_disconnected(t, uuid: str) -> None:
         logger.info(f"Pipeline ending for call {uuid}")
+        call_log.on_disconnected(reason="hangup")
         await task.cancel()
 
-    return task
+    return task, call_log

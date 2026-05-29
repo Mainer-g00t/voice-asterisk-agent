@@ -67,16 +67,18 @@ async def handle_call(
     # Create the pipeline BEFORE connecting so that event handlers registered
     # inside create_pipeline_task (e.g. on_client_connected) are in place
     # before transport.connect() fires them.
-    task = await create_pipeline_task(transport, call_uuid)
+    task, call_log = await create_pipeline_task(transport, call_uuid)
 
     await transport.connect(reader, writer, call_uuid)
 
     # handle_sigint=False: only the outer process should handle SIGINT
     runner = PipelineRunner(handle_sigint=False)
+    end_reason = "hangup"
     try:
         await runner.run(task)
     except Exception as e:
         logger.error(f"Pipeline error for call {call_uuid}: {e}")
+        end_reason = "error"
     finally:
         await transport.disconnect(call_uuid)
         try:
@@ -85,6 +87,10 @@ async def handle_call(
         except (BrokenPipeError, ConnectionResetError):
             pass  # remote side already closed the connection
         logger.info(f"Call {call_uuid} finished")
+        # Send call log to config-api (best-effort, non-blocking on failure)
+        if not call_log.ended_at:
+            call_log.on_disconnected(reason=end_reason)
+        await call_log.send()
 
 
 async def main() -> None:
