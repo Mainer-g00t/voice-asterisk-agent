@@ -70,6 +70,25 @@ async def create_route(
     return RedirectResponse("/admin/routes?flash=Route+added", status_code=303)
 
 
+@router.post("/routes/{route_id}/edit", response_class=HTMLResponse)
+async def edit_route(
+    request: Request,
+    route_id: str,
+    agent_slug: str = Form(...),
+    description: str = Form(""),
+    is_active: str = Form("off"),
+):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """UPDATE phone_routes
+               SET agent_slug=$2, description=$3, is_active=$4
+               WHERE id=$1""",
+            route_id, agent_slug, description or None, is_active == "on",
+        )
+    return RedirectResponse("/admin/routes?flash=Route+updated", status_code=303)
+
+
 @router.post("/routes/{route_id}/delete", response_class=HTMLResponse)
 async def delete_route(request: Request, route_id: str):
     pool = db.get_pool()
