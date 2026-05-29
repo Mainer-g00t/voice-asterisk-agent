@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 import db
+import docker_manager
 from routers.agents import _push_snapshot
 
 router = APIRouter()
@@ -23,7 +24,58 @@ TTS_OPTIONS = ["local", "openai", "cartesia"]
 
 @router.get("", response_class=HTMLResponse)
 async def admin_root(request: Request):
-    return RedirectResponse("/admin/agents")
+    return RedirectResponse("/admin/routes")
+
+
+# ── Phone routes UI ───────────────────────────────────────────────────────────
+
+@router.get("/routes", response_class=HTMLResponse)
+async def routes_list(request: Request, flash: str = ""):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        routes = await conn.fetch("SELECT * FROM phone_routes ORDER BY did")
+        agents = await conn.fetch("SELECT slug, display_name FROM agents WHERE is_active=true ORDER BY display_name")
+    containers = docker_manager.list_running_agents()
+    return templates.TemplateResponse(
+        request,
+        "routes/list.html",
+        {
+            "routes": [dict(r) for r in routes],
+            "agents": [dict(a) for a in agents],
+            "containers": containers,
+            "flash": flash or None,
+        },
+    )
+
+
+@router.post("/routes", response_class=HTMLResponse)
+async def create_route(
+    request: Request,
+    did: str = Form(...),
+    agent_slug: str = Form(...),
+    description: str = Form(""),
+):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                "INSERT INTO phone_routes (did, agent_slug, description) VALUES ($1, $2, $3)",
+                did, agent_slug, description or None,
+            )
+        except Exception as e:
+            if "unique" in str(e).lower():
+                pass  # silently ignore duplicate for now
+            else:
+                raise
+    return RedirectResponse("/admin/routes?flash=Route+added", status_code=303)
+
+
+@router.post("/routes/{route_id}/delete", response_class=HTMLResponse)
+async def delete_route(request: Request, route_id: str):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM phone_routes WHERE id=$1", route_id)
+    return RedirectResponse("/admin/routes?flash=Route+deleted", status_code=303)
 
 
 @router.get("/agents", response_class=HTMLResponse)

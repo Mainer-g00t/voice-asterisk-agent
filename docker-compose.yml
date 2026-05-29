@@ -47,6 +47,14 @@ services:
     environment:
       DATABASE_URL: postgresql://voiceai:${POSTGRES_PASSWORD}@postgres:5432/voiceai
       REDIS_URL: redis://redis:6379/0
+      # Docker manager settings
+      AGENT_IMAGE: voice-asterisk-agent-agent
+      DOCKER_NETWORK: voice-asterisk-agent_voiceai
+      ASTERISK_CONTAINER: asterisk
+      WORKSPACE: /workspace
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker SDK access
+      - .:/workspace                                # project root (write extensions.conf)
     ports:
       - "8080:8080"
     networks: [voiceai]
@@ -87,20 +95,21 @@ services:
     networks: [voiceai]
     restart: unless-stopped
 
-  # ── Voice agent ───────────────────────────────────────────────────────────────
+  # ── Default voice agent (catch-all fallback) ──────────────────────────────────
+  # Route-managed agents are named agent-{slug} and started via the admin UI Apply button.
+  # This container serves as the fallback when no explicit route is configured.
 
   agent:
     build:
       context: ./agent
       dockerfile: Dockerfile
+    image: voice-asterisk-agent-agent  # named so route-managed containers can use it
     container_name: agent
     env_file: .env
     environment:
       REDIS_URL: redis://redis:6379/0
       CONFIG_API_URL: http://config-api:8080
       AGENT_SLUG: ${AGENT_SLUG:-basic}
-    ports:
-      - "9099:9099"
     networks: [voiceai]
     depends_on:
       postgres:
@@ -132,7 +141,7 @@ services:
       - "10000-10100:10000-10100/udp"
     volumes:
       - ./asterisk/pjsip.conf:/etc/asterisk/pjsip.conf.tmpl:ro
-      - ./asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
+      - ./asterisk/extensions.conf:/etc/asterisk/extensions.conf  # writable — config-api regenerates it
       - ./asterisk/rtp.conf:/etc/asterisk/rtp.conf:ro
       - ./asterisk/logger.conf:/etc/asterisk/logger.conf:ro
     networks: [voiceai]

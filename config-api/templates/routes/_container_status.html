@@ -1,0 +1,14 @@
+{% if containers %}
+<ul class="list-group list-group-flush">
+  {% for c in containers %}
+  <li class="list-group-item d-flex justify-content-between align-items-center py-2">
+    <code class="small">{{ c.name }}</code>
+    <span class="badge {% if c.status == 'running' %}bg-success{% else %}bg-secondary{% endif %}">
+      {{ c.status }}
+    </span>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="text-muted small px-3 py-2">No agent containers running yet. Click Apply.</div>
+{% endif %}

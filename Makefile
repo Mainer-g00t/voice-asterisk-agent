@@ -1,11 +1,11 @@
-.PHONY: pull up down logs logs-agent logs-tts logs-llm logs-stt logs-asterisk restart cli shell
+.PHONY: pull up down logs logs-agent logs-tts logs-llm logs-stt logs-asterisk restart cli shell migrate
 
 # Pull latest code + updated base images
 pull:
 	git pull --ff-only
 	docker compose pull
 
-# Build images and start both services in the background
+# Build images and start all services in the background
 up:
 	docker compose up --build -d
 
@@ -44,3 +44,13 @@ cli:
 # Open a shell inside the agent container
 shell:
 	docker compose exec agent /bin/bash
+
+# Apply all pending SQL migrations to the running Postgres container
+# Usage: make migrate  (safe to run multiple times — Postgres ignores IF NOT EXISTS)
+migrate:
+	@echo "Applying migrations..."
+	@for f in config-api/migrations/*.sql; do \
+		echo "  $$f"; \
+		docker exec -i postgres psql -U voiceai -d voiceai < $$f; \
+	done
+	@echo "Done."

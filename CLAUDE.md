@@ -25,6 +25,7 @@ Eight Docker services total (`docker-compose.yml`). Everything runs locally; no 
 make up            # build images and start all services in background
 make down          # stop and remove containers
 make restart       # rebuild and restart only the agent (faster than make up)
+make migrate       # apply all SQL migrations to the running Postgres (safe to re-run)
 make logs          # stream logs from all services
 make logs-agent    # stream logs from a single service (also: logs-tts, logs-llm, logs-stt, logs-asterisk)
 make cli           # open Asterisk CLI (use `pjsip show endpoints` to verify softphone registration)
@@ -112,6 +113,22 @@ Configured in the admin UI at `http://localhost:8080/admin` — no `.env` change
 - `extensions.conf` — all calls from `[from-softphone]` context are answered and routed to `AudioSocket(${CALL_UUID}, agent:9099)`.
 - `rtp.conf` — RTP port range 10000–10100.
 - `docker-entrypoint.sh` — substitutes `ASTERISK_EXTERNAL_IP` into `pjsip.conf` at container start (needed for RTP NAT traversal when the softphone and Docker are on different hosts).
+
+### Phone routing (`phone_routes` table)
+
+Each row maps a DID (dialed number or Asterisk extension pattern) to an agent slug. Managed at `http://localhost:8080/admin/routes`.
+
+**Apply button flow:**
+1. Queries active routes from Postgres
+2. For each unique agent slug: starts `agent-{slug}` Docker container via Docker SDK (using the pre-built `voice-asterisk-agent-agent` image)
+3. Generates `asterisk/extensions.conf` from the route table and writes it to disk
+4. Runs `docker exec asterisk asterisk -rx "dialplan reload"` to activate new routes immediately
+
+Each `agent-{slug}` container listens on port 9099 internally. Asterisk addresses them by container name (`agent-basic:9099`, `agent-sales:9099`, etc.) on the `voiceai` Docker network — no port conflicts.
+
+The `agent` service in `docker-compose.yml` is the fallback container (and also builds the image that route-managed containers use).
+
+**New migrations**: run `make migrate` after pulling changes that add new `.sql` files to `config-api/migrations/`. Postgres only auto-applies migrations on first init.
 
 ### Adding a new agent
 
