@@ -3,6 +3,7 @@ Call logs API — receive call data from agents, expose for the admin UI.
 """
 
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -38,11 +39,14 @@ async def receive_call_log(body: CallLogIn):
         )
         did = did_row["did"] if did_row else None
 
+        def _parse_dt(s: str | None) -> datetime | None:
+            return datetime.fromisoformat(s) if s else None
+
         await conn.execute(
             """INSERT INTO call_logs
                (call_uuid, agent_slug, did, started_at, ended_at, duration_seconds,
                 turn_count, transcript, stt_provider, llm_provider, tts_provider, end_reason)
-               VALUES ($1,$2,$3,$4::timestamptz,$5::timestamptz,$6,$7,$8,$9,$10,$11,$12)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                ON CONFLICT (call_uuid) DO UPDATE SET
                  ended_at = EXCLUDED.ended_at,
                  duration_seconds = EXCLUDED.duration_seconds,
@@ -50,7 +54,7 @@ async def receive_call_log(body: CallLogIn):
                  transcript = EXCLUDED.transcript,
                  end_reason = EXCLUDED.end_reason""",
             body.call_uuid, body.agent_slug, did,
-            body.started_at, body.ended_at, body.duration_seconds,
+            _parse_dt(body.started_at), _parse_dt(body.ended_at), body.duration_seconds,
             body.turn_count,
             json.dumps(body.transcript) if body.transcript is not None else None,
             body.stt_provider, body.llm_provider, body.tts_provider,
