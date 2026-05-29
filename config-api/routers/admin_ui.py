@@ -207,10 +207,14 @@ async def save_agent(
                    WHERE slug=$1""",
                 slug, display_name, system_prompt, greeting_trigger, active,
             )
+            def _clean_model(v: str) -> str | None:
+                """Return None for empty or literal 'None' strings."""
+                return v.strip() or None if v and v.strip() != "None" else None
+
             for ptype, pname, model in [
-                ("stt", stt_provider, stt_model or None),
-                ("llm", llm_provider, llm_model or None),
-                ("tts", tts_provider, tts_model or None),
+                ("stt", stt_provider, _clean_model(stt_model)),
+                ("llm", llm_provider, _clean_model(llm_model)),
+                ("tts", tts_provider, _clean_model(tts_model)),
             ]:
                 await conn.execute(
                     """INSERT INTO provider_configs (agent_id, provider_type, provider_name, model)

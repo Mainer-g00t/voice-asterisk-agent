@@ -119,7 +119,7 @@
           </select>
           <input name="{{ ptype }}_model" class="form-control form-control-sm font-monospace"
                  placeholder="model override (optional)"
-                 value="{{ p.get('model', '') if p else '' }}">
+                 value="{{ p.get('model') or '' if p else '' }}">
         </div>
         {% endfor %}
       </div>
