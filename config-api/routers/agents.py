@@ -1,0 +1,300 @@
+"""
+Agent CRUD API — write to Postgres, push snapshot to Redis on every mutation.
+"""
+
+import json
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
+from loguru import logger
+from pydantic import BaseModel
+
+import db
+import redis_client
+
+router = APIRouter()
+
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
+
+class AgentBase(BaseModel):
+    display_name: str
+    system_prompt: str
+    greeting_trigger: str = "Hello"
+    is_active: bool = True
+
+
+class AgentCreate(AgentBase):
+    slug: str
+
+
+class AgentUpdate(BaseModel):
+    display_name: str | None = None
+    system_prompt: str | None = None
+    greeting_trigger: str | None = None
+    is_active: bool | None = None
+
+
+class ProviderConfig(BaseModel):
+    provider_name: str
+    model: str | None = None
+    extra_config: dict[str, Any] | None = None
+
+
+class ToolDefinition(BaseModel):
+    tool_name: str
+    handler_type: str
+    description: str
+    parameters: dict[str, Any]
+    required_params: list[str] = []
+    sort_order: int = 0
+
+
+class SpecialistConfig(BaseModel):
+    specialist_key: str
+    display_name: str
+    system_prompt: str
+    subagent_model: str | None = None
+    sort_order: int = 0
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+async def _get_agent_id(conn, slug: str) -> str:
+    row = await conn.fetchrow("SELECT id FROM agents WHERE slug = $1", slug)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
+    return str(row["id"])
+
+
+async def _push_snapshot(slug: str) -> None:
+    snapshot = await db.build_snapshot(slug)
+    if snapshot:
+        synced = await redis_client.push_agent_snapshot(snapshot)
+        if not synced:
+            logger.warning(f"Config saved to Postgres but Redis push failed for '{slug}'")
+
+
+async def _save_version(conn, agent_id: str, snapshot: dict) -> None:
+    await conn.execute(
+        "INSERT INTO config_versions (agent_id, snapshot) VALUES ($1, $2)",
+        agent_id,
+        json.dumps(snapshot),
+    )
+
+
+# ── Agent endpoints ───────────────────────────────────────────────────────────
+
+@router.get("")
+async def list_agents():
+    return await db.list_agents()
+
+
+@router.post("", status_code=201)
+async def create_agent(body: AgentCreate):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            try:
+                row = await conn.fetchrow(
+                    "INSERT INTO agents (slug, display_name, system_prompt, greeting_trigger, is_active) "
+                    "VALUES ($1, $2, $3, $4, $5) RETURNING *",
+                    body.slug, body.display_name, body.system_prompt,
+                    body.greeting_trigger, body.is_active,
+                )
+            except Exception as e:
+                if "unique" in str(e).lower():
+                    raise HTTPException(status_code=409, detail=f"Slug '{body.slug}' already exists")
+                raise
+
+    await _push_snapshot(body.slug)
+    return dict(row)
+
+
+@router.get("/{slug}")
+async def get_agent(slug: str):
+    data = await db.get_agent_full(slug)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
+    return data
+
+
+@router.put("/{slug}")
+async def update_agent(slug: str, body: AgentUpdate):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            agent_id = await _get_agent_id(conn, slug)
+            updates, params = [], [agent_id]
+            for field in ("display_name", "system_prompt", "greeting_trigger", "is_active"):
+                val = getattr(body, field)
+                if val is not None:
+                    params.append(val)
+                    updates.append(f"{field} = ${len(params)}")
+            if not updates:
+                raise HTTPException(status_code=422, detail="No fields to update")
+            await conn.execute(
+                f"UPDATE agents SET {', '.join(updates)} WHERE id = $1", *params
+            )
+            snapshot = await db.build_snapshot(slug)
+            if snapshot:
+                await _save_version(conn, agent_id, snapshot)
+
+    await _push_snapshot(slug)
+    return {"status": "updated"}
+
+
+@router.delete("/{slug}")
+async def delete_agent(slug: str):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "UPDATE agents SET is_active = false WHERE slug = $1", slug
+            )
+    await redis_client.delete_agent_snapshot(slug)
+    return {"status": "deactivated"}
+
+
+# ── Provider config endpoints ─────────────────────────────────────────────────
+
+@router.put("/{slug}/providers/{provider_type}")
+async def upsert_provider(slug: str, provider_type: str, body: ProviderConfig):
+    if provider_type not in ("stt", "llm", "tts"):
+        raise HTTPException(status_code=422, detail="provider_type must be stt, llm, or tts")
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            agent_id = await _get_agent_id(conn, slug)
+            await conn.execute(
+                """INSERT INTO provider_configs (agent_id, provider_type, provider_name, model, extra_config)
+                   VALUES ($1, $2, $3, $4, $5)
+                   ON CONFLICT (agent_id, provider_type)
+                   DO UPDATE SET provider_name = EXCLUDED.provider_name,
+                                 model = EXCLUDED.model,
+                                 extra_config = EXCLUDED.extra_config""",
+                agent_id, provider_type, body.provider_name, body.model,
+                json.dumps(body.extra_config) if body.extra_config else None,
+            )
+    await _push_snapshot(slug)
+    return {"status": "updated"}
+
+
+# ── Tool definition endpoints ─────────────────────────────────────────────────
+
+@router.get("/{slug}/tools")
+async def list_tools(slug: str):
+    data = await db.get_agent_full(slug)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
+    return data["tools"]
+
+
+@router.put("/{slug}/tools/{tool_name}")
+async def upsert_tool(slug: str, tool_name: str, body: ToolDefinition):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            agent_id = await _get_agent_id(conn, slug)
+            await conn.execute(
+                """INSERT INTO tool_definitions
+                       (agent_id, tool_name, handler_type, description, parameters, required_params, sort_order)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7)
+                   ON CONFLICT (agent_id, tool_name) DO UPDATE SET
+                       handler_type = EXCLUDED.handler_type,
+                       description = EXCLUDED.description,
+                       parameters = EXCLUDED.parameters,
+                       required_params = EXCLUDED.required_params,
+                       sort_order = EXCLUDED.sort_order""",
+                agent_id, tool_name, body.handler_type, body.description,
+                json.dumps(body.parameters), body.required_params, body.sort_order,
+            )
+    await _push_snapshot(slug)
+    return {"status": "updated"}
+
+
+@router.delete("/{slug}/tools/{tool_name}")
+async def delete_tool(slug: str, tool_name: str):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            agent_id = await _get_agent_id(conn, slug)
+            await conn.execute(
+                "DELETE FROM tool_definitions WHERE agent_id = $1 AND tool_name = $2",
+                agent_id, tool_name,
+            )
+    await _push_snapshot(slug)
+    return {"status": "deleted"}
+
+
+# ── Specialist config endpoints ───────────────────────────────────────────────
+
+@router.get("/{slug}/specialists")
+async def list_specialists(slug: str):
+    data = await db.get_agent_full(slug)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
+    return data["specialists"]
+
+
+@router.put("/{slug}/specialists/{specialist_key}")
+async def upsert_specialist(slug: str, specialist_key: str, body: SpecialistConfig):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            agent_id = await _get_agent_id(conn, slug)
+            await conn.execute(
+                """INSERT INTO specialist_configs
+                       (agent_id, specialist_key, display_name, system_prompt, subagent_model, sort_order)
+                   VALUES ($1, $2, $3, $4, $5, $6)
+                   ON CONFLICT (agent_id, specialist_key) DO UPDATE SET
+                       display_name = EXCLUDED.display_name,
+                       system_prompt = EXCLUDED.system_prompt,
+                       subagent_model = EXCLUDED.subagent_model,
+                       sort_order = EXCLUDED.sort_order""",
+                agent_id, specialist_key, body.display_name, body.system_prompt,
+                body.subagent_model, body.sort_order,
+            )
+    await _push_snapshot(slug)
+    return {"status": "updated"}
+
+
+@router.delete("/{slug}/specialists/{specialist_key}")
+async def delete_specialist(slug: str, specialist_key: str):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            agent_id = await _get_agent_id(conn, slug)
+            await conn.execute(
+                "DELETE FROM specialist_configs WHERE agent_id = $1 AND specialist_key = $2",
+                agent_id, specialist_key,
+            )
+    await _push_snapshot(slug)
+    return {"status": "deleted"}
+
+
+# ── Version history ───────────────────────────────────────────────────────────
+
+@router.get("/{slug}/versions")
+async def list_versions(slug: str):
+    data = await db.get_agent_full(slug)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
+    return data["versions"]
+
+
+@router.post("/{slug}/versions/{version_id}/restore")
+async def restore_version(slug: str, version_id: str):
+    data = await db.get_agent_full(slug)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
+
+    agent_id = str(data["agent"]["id"])
+    snapshot = await db.get_version_snapshot(agent_id, version_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    synced = await redis_client.push_agent_snapshot(snapshot)
+    return {"status": "restored", "redis_synced": synced}

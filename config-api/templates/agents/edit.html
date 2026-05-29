@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}{{ agent.display_name if agent else 'New agent' }} — Voice Agent Admin{% endblock %}
+{% block content %}
+
+<div class="d-flex align-items-center gap-2 mb-3">
+  <a href="/admin/agents" class="text-decoration-none text-muted">← Agents</a>
+  <span class="text-muted">/</span>
+  <h5 class="mb-0">{{ agent.display_name if agent else 'New agent' }}</h5>
+</div>
+
+{% if flash %}
+<div class="alert alert-success flash py-2">{{ flash }}</div>
+{% endif %}
+
+<form method="post" action="/admin/agents/{{ agent.slug if agent else 'new' }}">
+<div class="row g-4">
+
+  <!-- Left column: core config -->
+  <div class="col-lg-8">
+
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">Identity</div>
+      <div class="card-body">
+        {% if not agent %}
+        <div class="mb-3">
+          <label class="form-label">Slug <small class="text-muted">(unique, lowercase, no spaces)</small></label>
+          <input name="slug" class="form-control font-monospace" required pattern="[a-z0-9_]+" value="">
+        </div>
+        {% endif %}
+        <div class="mb-3">
+          <label class="form-label">Display name</label>
+          <input name="display_name" class="form-control" required value="{{ agent.display_name if agent else '' }}">
+        </div>
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" name="is_active" id="is_active"
+            {% if not agent or agent.is_active %}checked{% endif %}>
+          <label class="form-check-label" for="is_active">Active</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">Prompts</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">System prompt</label>
+          <textarea name="system_prompt" class="form-control mono" rows="10" required>{{ agent.system_prompt if agent else '' }}</textarea>
+        </div>
+        <div>
+          <label class="form-label">Greeting trigger <small class="text-muted">(injected as first user message)</small></label>
+          <input name="greeting_trigger" class="form-control" value="{{ agent.greeting_trigger if agent else 'Hello' }}">
+        </div>
+      </div>
+    </div>
+
+    {% if tools %}
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">Tools</div>
+      <div class="card-body">
+        {% for t in tools %}
+        <div class="border rounded p-3 mb-3">
+          <div class="d-flex justify-content-between">
+            <code>{{ t.tool_name }}</code>
+            <span class="badge bg-secondary">{{ t.handler_type }}</span>
+          </div>
+          <div class="text-muted small mt-1">{{ t.description }}</div>
+        </div>
+        {% endfor %}
+        <a href="/docs#/agents/upsert_tool_api_agents__slug__tools__tool_name__put" target="_blank"
+           class="btn btn-outline-secondary btn-sm">Manage tools via API</a>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if specialists %}
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">Specialists (subagents)</div>
+      <div class="card-body">
+        {% for s in specialists %}
+        <div class="border rounded p-3 mb-3">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <strong>{{ s.display_name }}</strong>
+            <code class="text-muted small">{{ s.specialist_key }}</code>
+          </div>
+          <textarea class="form-control mono" rows="3" readonly>{{ s.system_prompt }}</textarea>
+          {% if s.subagent_model %}
+          <div class="text-muted small mt-1">Model: {{ s.subagent_model }}</div>
+          {% endif %}
+        </div>
+        {% endfor %}
+        <a href="/docs#/agents/upsert_specialist_api_agents__slug__specialists__specialist_key__put"
+           target="_blank" class="btn btn-outline-secondary btn-sm">Manage specialists via API</a>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- Right column: providers + versions -->
+  <div class="col-lg-4">
+
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">Providers</div>
+      <div class="card-body">
+        {% for ptype, options, label in [
+            ('stt', stt_options, 'STT'),
+            ('llm', llm_options, 'LLM'),
+            ('tts', tts_options, 'TTS')
+          ] %}
+        {% set p = providers_by_type.get(ptype, {}) if providers_by_type is defined else {} %}
+        <div class="mb-3">
+          <label class="form-label">{{ label }}</label>
+          <select name="{{ ptype }}_provider" class="form-select form-select-sm mb-1">
+            {% for opt in options %}
+            <option value="{{ opt }}" {% if p.get('provider_name') == opt or (not p and opt == 'local') %}selected{% endif %}>
+              {{ opt }}
+            </option>
+            {% endfor %}
+          </select>
+          <input name="{{ ptype }}_model" class="form-control form-control-sm font-monospace"
+                 placeholder="model override (optional)"
+                 value="{{ p.get('model', '') if p else '' }}">
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="d-grid mb-4">
+      <button type="submit" class="btn btn-primary">Save &amp; push to Redis</button>
+    </div>
+
+    {% if versions %}
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">Version history</div>
+      <ul class="list-group list-group-flush">
+        {% for v in versions %}
+        <li class="list-group-item d-flex justify-content-between align-items-center py-2">
+          <span class="text-muted small">{{ v.created_at.strftime('%m-%d %H:%M') if v.created_at else '?' }}</span>
+          <form method="post" action="/api/agents/{{ agent.slug }}/versions/{{ v.id }}/restore"
+                style="display:inline" onsubmit="return confirm('Restore this version to Redis?')">
+            <button class="btn btn-outline-warning btn-sm py-0">Restore</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+</form>
+{% endblock %}

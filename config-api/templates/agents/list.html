@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Agents — Voice Agent Admin{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">Agents</h4>
+  <a href="/admin/agents/new" class="btn btn-primary btn-sm">+ New agent</a>
+</div>
+
+<div class="card shadow-sm">
+  <table class="table table-hover mb-0">
+    <thead class="table-light">
+      <tr>
+        <th>Slug</th>
+        <th>Name</th>
+        <th>Status</th>
+        <th>Last updated</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in agents %}
+      <tr>
+        <td><code>{{ a.slug }}</code></td>
+        <td>{{ a.display_name }}</td>
+        <td>
+          {% if a.is_active %}
+            <span class="badge bg-success">active</span>
+          {% else %}
+            <span class="badge bg-secondary">inactive</span>
+          {% endif %}
+        </td>
+        <td class="text-muted small">{{ a.updated_at.strftime('%Y-%m-%d %H:%M') if a.updated_at else '—' }}</td>
+        <td class="text-end">
+          <a href="/admin/agents/{{ a.slug }}/edit" class="btn btn-outline-secondary btn-sm">Edit</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

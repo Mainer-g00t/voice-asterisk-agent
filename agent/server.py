@@ -67,7 +67,7 @@ async def handle_call(
     # Create the pipeline BEFORE connecting so that event handlers registered
     # inside create_pipeline_task (e.g. on_client_connected) are in place
     # before transport.connect() fires them.
-    task = await create_pipeline_task(transport)
+    task = await create_pipeline_task(transport, call_uuid)
 
     await transport.connect(reader, writer, call_uuid)
 

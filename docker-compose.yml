@@ -1,6 +1,63 @@
 services:
 
-  # ── Local AI services (swap for cloud by changing *_PROVIDER in .env) ────────
+  # ── Infrastructure ────────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_DB: voiceai
+      POSTGRES_USER: voiceai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-voiceai_dev}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config-api/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    networks: [voiceai]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voiceai"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks: [voiceai]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Config API + Admin UI ─────────────────────────────────────────────────────
+
+  config-api:
+    build: ./config-api
+    container_name: config-api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://voiceai:${POSTGRES_PASSWORD:-voiceai_dev}@postgres:5432/voiceai
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8080:8080"
+    networks: [voiceai]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Local AI services (swap for cloud via admin UI or .env) ───────────────────
 
   stt:
     build: ./stt
@@ -38,10 +95,26 @@ services:
       dockerfile: Dockerfile
     container_name: agent
     env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CONFIG_API_URL: http://config-api:8080
+      AGENT_SLUG: ${AGENT_SLUG:-basic}
     ports:
       - "9099:9099"
     networks: [voiceai]
-    depends_on: [stt, llm, tts]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      config-api:
+        condition: service_started
+      stt:
+        condition: service_started
+      llm:
+        condition: service_started
+      tts:
+        condition: service_started
     restart: unless-stopped
 
   # ── Asterisk PBX ──────────────────────────────────────────────────────────────
@@ -53,9 +126,6 @@ services:
     platform: linux/amd64
     container_name: asterisk
     environment:
-      # IP that baresip uses to reach Asterisk's RTP ports (Docker port mappings).
-      # Defaults to 127.0.0.1 — works when baresip and Docker run on the same machine.
-      # Override in .env if baresip is on a different host: ASTERISK_EXTERNAL_IP=192.168.x.x
       ASTERISK_EXTERNAL_IP: ${ASTERISK_EXTERNAL_IP:-127.0.0.1}
     ports:
       - "5060:5060/udp"
@@ -75,3 +145,5 @@ networks:
 
 volumes:
   ollama_data:
+  postgres_data:
+  redis_data:
