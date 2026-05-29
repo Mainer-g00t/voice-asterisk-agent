@@ -105,10 +105,8 @@ def _build_llm(provider_cfg: dict):
     if name == "local":
         from pipecat.services.ollama.llm import OLLamaLLMService
         return OLLamaLLMService(
+            model=provider_cfg.get("model") or os.environ.get("OLLAMA_MODEL", "smollm2:135m"),
             base_url="http://llm:11434/v1",
-            settings=OLLamaLLMService.Settings(
-                model=provider_cfg.get("model") or os.environ.get("OLLAMA_MODEL", "smollm2:135m"),
-            ),
         )
     elif name == "openai":
         from pipecat.services.openai.llm import OpenAILLMService
@@ -120,9 +118,7 @@ def _build_llm(provider_cfg: dict):
         from pipecat.services.anthropic.llm import AnthropicLLMService
         return AnthropicLLMService(
             api_key=os.environ["ANTHROPIC_API_KEY"],
-            settings=AnthropicLLMService.Settings(
-                model=provider_cfg.get("model") or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-            ),
+            model=provider_cfg.get("model") or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         )
 
 
