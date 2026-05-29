@@ -36,6 +36,7 @@ _AGENTS = {
     "customer_service": "agents.customer_service",
     "storyteller":      "agents.storyteller",
     "language_tutor":   "agents.language_tutor",
+    "orchestrator":     "agents.orchestrator",
 }
 
 _mode = os.environ.get("AGENT_MODE", "basic").lower()
@@ -124,6 +125,10 @@ async def create_pipeline_task(transport: AudioSocketTransport) -> PipelineTask:
     llm = _build_llm()
     tts = _build_tts()
 
+    # Wire up tool handlers if the agent defines them (e.g. orchestrator agent).
+    if hasattr(_agent, "register_tools"):
+        _agent.register_tools(llm)
+
     logger.info(
         f"Pipeline: agent={_mode} "
         f"STT={os.environ.get('STT_PROVIDER', 'local')} "
@@ -131,7 +136,11 @@ async def create_pipeline_task(transport: AudioSocketTransport) -> PipelineTask:
         f"TTS={os.environ.get('TTS_PROVIDER', 'local')}"
     )
 
-    context = LLMContext(messages=[{"role": "system", "content": SYSTEM_PROMPT}])
+    _tools = getattr(_agent, "TOOLS", None)
+    context = LLMContext(
+        messages=[{"role": "system", "content": SYSTEM_PROMPT}],
+        tools=_tools,
+    )
     aggregators = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
