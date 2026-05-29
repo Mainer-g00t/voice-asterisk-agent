@@ -183,12 +183,16 @@ class AudioSocketOutputTransport(BaseOutputTransport):
                 chunk = downsampled[i:i + chunk_size]
                 header = struct.pack(HEADER_FMT, MSG_AUDIO, len(chunk))
                 self._writer.write(header + chunk)
-                await self._writer.drain()
                 await asyncio.sleep(0.020)
+            await self._writer.drain()
             return True
         except (ConnectionResetError, BrokenPipeError) as e:
             logger.warning(f"AudioSocket write failed: {e}")
             return False
+
+    def close(self) -> None:
+        if self._writer:
+            self._writer.close()
 
     async def cleanup(self) -> None:
         await super().cleanup()
@@ -248,8 +252,8 @@ class AudioSocketTransport(BaseTransport):
 
     async def disconnect(self, call_uuid: str) -> None:
         await self._call_event_handler("on_client_disconnected", call_uuid)
-        if self._output and self._output._writer:
-            self._output._writer.close()
+        if self._output:
+            self._output.close()
 
     async def cleanup(self) -> None:
         pass

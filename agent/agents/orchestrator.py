@@ -19,6 +19,7 @@ Requires: LLM_PROVIDER=anthropic  (tool calling + subagent API calls)
 
 import os
 
+import anthropic
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -88,6 +89,18 @@ TOOLS = ToolsSchema(standard_tools=[
     )
 ])
 
+# ── Shared async Anthropic client (one instance per process) ──────────────────
+
+_anthropic_client: anthropic.AsyncAnthropic | None = None
+
+
+def _get_anthropic_client() -> anthropic.AsyncAnthropic:
+    global _anthropic_client
+    if _anthropic_client is None:
+        _anthropic_client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    return _anthropic_client
+
+
 # ── Tool handler (spawns the subagent) ────────────────────────────────────────
 
 async def _handle_route_to_specialist(params: FunctionCallParams) -> None:
@@ -98,9 +111,8 @@ async def _handle_route_to_specialist(params: FunctionCallParams) -> None:
     logger.info(f"[orchestrator] delegating to '{specialist}' subagent: {query!r}")
 
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-        response = client.messages.create(
+        client = _get_anthropic_client()
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=150,
             system=system_prompt,
