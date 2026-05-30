@@ -109,7 +109,140 @@
         setTimeout(function() { el.remove(); }, 400);
       });
     }, 4000);
+
+    // ── Table search + sortable columns ──────────────────────────────────────
+    // Usage:
+    //   Search: <input data-table-search="myTable">
+    //   Table:  <table id="myTable" class="va-table">
+    //   Sort:   <th data-sort>Column</th>  (add data-sort-type="num" for numbers/durations)
+    (function() {
+      var ICON_NEUTRAL = '<i class="bi bi-chevron-expand text-muted ms-1 small sort-icon"></i>';
+      var ICON_ASC     = '<i class="bi bi-chevron-up ms-1 small sort-icon"></i>';
+      var ICON_DESC    = '<i class="bi bi-chevron-down ms-1 small sort-icon"></i>';
+
+      function sortVal(cell, type) {
+        var t = cell ? cell.textContent.trim() : '';
+        if (type === 'num') {
+          // parse "1:23" as seconds, plain numbers, or fall back to text
+          var m = t.match(/^(\d+):(\d+)$/);
+          if (m) return parseInt(m[1]) * 60 + parseInt(m[2]);
+          var n = parseFloat(t.replace(/[^0-9.\-]/g, ''));
+          return isNaN(n) ? t.toLowerCase() : n;
+        }
+        return t.toLowerCase();
+      }
+
+      function initTable(table) {
+        if (table._vaInit) return;
+        table._vaInit = true;
+
+        var headers = table.querySelectorAll('thead th[data-sort]');
+        headers.forEach(function(th) {
+          th.style.cursor = 'pointer';
+          th.style.userSelect = 'none';
+          th.style.whiteSpace = 'nowrap';
+          th.innerHTML += ICON_NEUTRAL;
+          th._sortDir = 0; // 0=none 1=asc -1=desc
+
+          th.addEventListener('click', function() {
+            var tbody = table.querySelector('tbody');
+            var rows = Array.from(tbody.querySelectorAll('tr:not([data-empty])'));
+            var colIdx = Array.from(th.parentElement.children).indexOf(th);
+            var type = th.dataset.sortType || 'text';
+
+            // cycle: neutral → asc → desc → neutral
+            th._sortDir = th._sortDir === 0 ? 1 : th._sortDir === 1 ? -1 : 0;
+
+            // reset other headers
+            headers.forEach(function(h) {
+              if (h !== th) {
+                h._sortDir = 0;
+                h.querySelector('.sort-icon').outerHTML = ICON_NEUTRAL;
+              }
+            });
+            var icon = th.querySelector('.sort-icon');
+            if (th._sortDir === 1)       icon.outerHTML = ICON_ASC;
+            else if (th._sortDir === -1) icon.outerHTML = ICON_DESC;
+            else                         icon.outerHTML = ICON_NEUTRAL;
+
+            if (th._sortDir === 0) {
+              // restore original order
+              rows.sort(function(a, b) { return (a._origIdx || 0) - (b._origIdx || 0); });
+            } else {
+              var dir = th._sortDir;
+              rows.sort(function(a, b) {
+                var av = sortVal(a.cells[colIdx], type);
+                var bv = sortVal(b.cells[colIdx], type);
+                if (av < bv) return -dir;
+                if (av > bv) return dir;
+                return 0;
+              });
+            }
+            rows.forEach(function(r) { tbody.appendChild(r); });
+          });
+        });
+
+        // stamp original row order so we can restore it
+        var rows = table.querySelectorAll('tbody tr:not([data-empty])');
+        rows.forEach(function(r, i) { r._origIdx = i; });
+      }
+
+      // Search wiring
+      function initSearch(input) {
+        if (input._vaInit) return;
+        input._vaInit = true;
+        var tableId = input.dataset.tableSearch;
+        var table = document.getElementById(tableId);
+        if (!table) return;
+        initTable(table);
+
+        var counter = input.closest('.va-search-wrap') && input.closest('.va-search-wrap').querySelector('.va-search-count');
+
+        input.addEventListener('input', function() {
+          var q = input.value.toLowerCase().trim();
+          var rows = table.querySelectorAll('tbody tr:not([data-empty])');
+          var visible = 0;
+          rows.forEach(function(tr) {
+            var match = !q || tr.textContent.toLowerCase().includes(q);
+            tr.style.display = match ? '' : 'none';
+            if (match) visible++;
+          });
+          if (counter) {
+            counter.textContent = q ? visible + ' result' + (visible !== 1 ? 's' : '') : '';
+          }
+          // show/hide the empty-state row
+          var emptyRow = table.querySelector('tbody tr[data-empty]');
+          if (emptyRow) emptyRow.style.display = (visible === 0 && q) ? '' : 'none';
+
+          // if no results and no dedicated empty row, show inline message
+          var noMatch = table.querySelector('tbody tr.va-no-match');
+          if (visible === 0 && q) {
+            if (!noMatch) {
+              var ncols = table.querySelectorAll('thead th').length;
+              noMatch = document.createElement('tr');
+              noMatch.className = 'va-no-match';
+              noMatch.innerHTML = '<td colspan="' + ncols + '" class="text-center text-muted py-3">No results for "<em>' + q.replace(/</g,'&lt;') + '</em>"</td>';
+              table.querySelector('tbody').appendChild(noMatch);
+            }
+            noMatch.style.display = '';
+          } else if (noMatch) {
+            noMatch.style.display = 'none';
+          }
+        });
+      }
+
+      // Auto-init on load
+      document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('[data-table-search]').forEach(initSearch);
+        document.querySelectorAll('table.va-table').forEach(initTable);
+      });
+    })();
   </script>
+  <style>
+    thead th[data-sort]:hover { background: rgba(0,0,0,.04); }
+    .va-search-wrap { position: relative; }
+    .va-search-count { font-size: .8rem; color: #6c757d; }
+  </style>
   {% block scripts %}{% endblock %}
 </body>
 </html>

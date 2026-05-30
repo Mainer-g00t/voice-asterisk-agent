@@ -3,7 +3,7 @@
 {% block content %}
 
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h5 class="mb-0">🔧 Global Tool Library</h5>
+  <h5 class="mb-0"><i class="bi bi-tools me-2 text-muted"></i>Global Tool Library</h5>
   <button type="button" class="btn btn-primary btn-sm" onclick="showAddForm()">+ New global tool</button>
 </div>
 
@@ -18,15 +18,25 @@
 
 <!-- Tools table -->
 <div class="card shadow-sm mb-4">
+  <div class="card-header py-2 border-bottom-0">
+    <div class="va-search-wrap d-flex align-items-center gap-2">
+      <div class="input-group input-group-sm" style="max-width:320px">
+        <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+        <input type="search" class="form-control border-start-0 ps-0"
+               placeholder="Search tools…" data-table-search="tools-table">
+      </div>
+      <span class="va-search-count"></span>
+    </div>
+  </div>
   <div class="table-responsive">
-    <table class="table table-hover mb-0">
+    <table id="tools-table" class="table table-hover mb-0 va-table">
       <thead class="table-light">
         <tr>
-          <th>Tool name</th>
-          <th>Handler type</th>
-          <th>Description</th>
+          <th data-sort>Tool name</th>
+          <th data-sort>Handler type</th>
+          <th data-sort>Description</th>
           <th>Parameters</th>
-          <th class="text-center">Agents</th>
+          <th class="text-center" data-sort data-sort-type="num">Agents</th>
           <th></th>
         </tr>
       </thead>
@@ -52,7 +62,9 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="6" class="text-muted text-center py-4">No global tools yet.</td></tr>
+        <tr data-empty>
+          <td colspan="6" class="text-muted text-center py-4">No global tools yet.</td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
@@ -142,6 +154,7 @@ function showAddForm() {
   document.getElementById('form-title').textContent = 'New global tool';
   document.getElementById('tool-form').classList.remove('d-none');
   onHandlerChange();
+  document.getElementById('tool-form').scrollIntoView({behavior:'smooth', block:'start'});
 }
 
 function hideForm() {
@@ -178,6 +191,7 @@ function editTool(t) {
   }
   document.getElementById('tool-form').classList.remove('d-none');
   onHandlerChange();
+  document.getElementById('tool-form').scrollIntoView({behavior:'smooth', block:'start'});
 }
 
 function addParamRow(data) {

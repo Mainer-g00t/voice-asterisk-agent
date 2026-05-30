@@ -28,19 +28,29 @@
 
     <!-- Route list -->
     <div class="card shadow-sm mb-4">
-      <div class="card-header fw-semibold d-flex justify-content-between align-items-center">
-        Routes
-        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addRouteModal">
-          + Add route
-        </button>
+      <div class="card-header border-bottom-0">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <span class="fw-semibold">Routes</span>
+          <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addRouteModal">
+            + Add route
+          </button>
+        </div>
+        <div class="va-search-wrap d-flex align-items-center gap-2">
+          <div class="input-group input-group-sm" style="max-width:280px">
+            <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+            <input type="search" class="form-control border-start-0 ps-0"
+                   placeholder="Search routes…" data-table-search="routes-table">
+          </div>
+          <span class="va-search-count"></span>
+        </div>
       </div>
-      <table class="table table-hover mb-0">
+      <table id="routes-table" class="table table-hover mb-0 va-table">
         <thead class="table-light">
           <tr>
-            <th>DID / Extension</th>
-            <th>Agent</th>
-            <th>Description</th>
-            <th>Active</th>
+            <th data-sort>DID / Extension</th>
+            <th data-sort>Agent</th>
+            <th data-sort>Description</th>
+            <th data-sort>Active</th>
             <th></th>
           </tr>
         </thead>

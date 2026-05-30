@@ -7,13 +7,24 @@
 </div>
 
 <div class="card shadow-sm">
-  <table class="table table-hover mb-0">
+  <div class="card-header py-2 border-bottom-0">
+    <div class="va-search-wrap d-flex align-items-center gap-2">
+      <div class="input-group input-group-sm" style="max-width:320px">
+        <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+        <input type="search" class="form-control border-start-0 ps-0"
+               placeholder="Search agents…" data-table-search="agents-table">
+      </div>
+      <span class="va-search-count"></span>
+    </div>
+  </div>
+
+  <table id="agents-table" class="table table-hover mb-0 va-table">
     <thead class="table-light">
       <tr>
-        <th>Slug</th>
-        <th>Name</th>
-        <th>Status</th>
-        <th>Last updated</th>
+        <th data-sort>Slug</th>
+        <th data-sort>Name</th>
+        <th data-sort>Status</th>
+        <th data-sort data-sort-type="num">Last updated</th>
         <th></th>
       </tr>
     </thead>
@@ -35,7 +46,7 @@
         </td>
       </tr>
       {% else %}
-      <tr>
+      <tr data-empty>
         <td colspan="5">
           <div class="empty-state">
             <div class="empty-icon"><i class="bi bi-robot"></i></div>

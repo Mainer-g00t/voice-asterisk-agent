@@ -9,11 +9,11 @@
   </h4>
 </div>
 
-<!-- Filters -->
+<!-- Filters + Search -->
 <div class="card shadow-sm mb-3">
   <div class="card-body py-2">
     <form method="get" action="/admin/calls" class="row g-2 align-items-end">
-      <div class="col-sm-4 col-md-3">
+      <div class="col-sm-5 col-md-3">
         <label class="form-label small mb-1 fw-semibold">Agent</label>
         <select name="agent" class="form-select form-select-sm" onchange="this.form.submit()">
           <option value="">All agents</option>
@@ -22,7 +22,7 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-sm-4 col-md-3">
+      <div class="col-sm-5 col-md-3">
         <label class="form-label small mb-1 fw-semibold">Direction</label>
         <select name="direction" class="form-select form-select-sm" onchange="this.form.submit()">
           <option value="">All</option>
@@ -30,8 +30,16 @@
           <option value="outbound" {% if filter_direction == 'outbound' %}selected{% endif %}>📤 Outbound</option>
         </select>
       </div>
+      <div class="col-sm-6 col-md-4">
+        <label class="form-label small mb-1 fw-semibold">Quick search <span class="text-muted fw-normal">(this page)</span></label>
+        <div class="input-group input-group-sm">
+          <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+          <input type="search" id="calls-search" class="form-control border-start-0 ps-0"
+                 placeholder="Filter by agent, UUID, reason…" data-table-search="calls-table">
+        </div>
+      </div>
       {% if filter_agent or filter_direction %}
-      <div class="col-auto">
+      <div class="col-auto align-self-end">
         <a href="/admin/calls" class="btn btn-sm btn-outline-secondary">
           <i class="bi bi-x-lg me-1"></i>Clear
         </a>
@@ -52,17 +60,17 @@
 {% else %}
 <div class="card shadow-sm">
   <div class="table-responsive">
-    <table class="table table-hover mb-0 align-middle">
+    <table id="calls-table" class="table table-hover mb-0 align-middle va-table">
       <thead class="table-light">
         <tr>
-          <th class="text-nowrap">Time</th>
+          <th class="text-nowrap" data-sort>Time</th>
           <th></th>
-          <th>From / To</th>
-          <th>Agent</th>
-          <th>Duration</th>
-          <th class="text-center">Turns</th>
-          <th class="d-none d-lg-table-cell">Providers</th>
-          <th class="d-none d-md-table-cell">Reason</th>
+          <th data-sort>From / To</th>
+          <th data-sort>Agent</th>
+          <th data-sort data-sort-type="num">Duration</th>
+          <th class="text-center" data-sort data-sort-type="num">Turns</th>
+          <th class="d-none d-lg-table-cell" data-sort>Providers</th>
+          <th class="d-none d-md-table-cell" data-sort>Reason</th>
           <th></th>
         </tr>
       </thead>
