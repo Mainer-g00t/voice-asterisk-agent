@@ -65,7 +65,8 @@
         <tr>
           <th class="text-nowrap" data-sort>Time</th>
           <th></th>
-          <th data-sort>From / To</th>
+          <th data-sort>From</th>
+          <th data-sort>To</th>
           <th data-sort>Agent</th>
           <th data-sort data-sort-type="num">Duration</th>
           <th class="text-center" data-sort data-sort-type="num">Turns</th>
@@ -91,7 +92,23 @@
             </span>
             {% endif %}
           </td>
-          <td class="text-nowrap"><code class="small">{{ c.get('destination') or c.did or '—' }}</code></td>
+          {# From: inbound → caller_id (who called us), outbound → caller_id (our number/name) #}
+          <td class="text-nowrap">
+            {% set from_val = c.get('caller_id') %}
+            {% if from_val %}
+              <code class="small">{{ from_val }}</code>
+            {% else %}
+              <span class="text-muted small">—</span>
+            {% endif %}
+          </td>
+          {# To: inbound → did (our DID that was dialed), outbound → destination (who we called) #}
+          <td class="text-nowrap">
+            {% if c.get('direction') == 'outbound' %}
+              <code class="small">{{ c.get('destination') or '—' }}</code>
+            {% else %}
+              <code class="small">{{ c.did or '—' }}</code>
+            {% endif %}
+          </td>
           <td>
             <a href="/admin/agents/{{ c.agent_slug }}/edit" class="text-decoration-none fw-medium">
               {{ c.agent_slug }}

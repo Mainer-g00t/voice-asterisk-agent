@@ -1,6 +1,7 @@
 """
 Internal endpoints — reachable only within the voiceai Docker network.
-Used by agent/pipeline.py as a fallback when the Redis key is missing.
+Used by agent/pipeline.py as a fallback when the Redis key is missing,
+and by the Asterisk dialplan (via CURL) to pre-register inbound caller info.
 """
 
 import json
@@ -30,6 +31,45 @@ async def get_snapshot(slug: str):
     await redis_client.push_agent_snapshot(snapshot)
 
     return JSONResponse(content=snapshot)
+
+
+class PreRegisterRequest(BaseModel):
+    call_uuid: str
+    caller_id: str | None = None   # CALLERID(num) from Asterisk
+    did: str | None = None         # dialed extension / DID
+
+
+@router.post("/calls/pre-register")
+async def pre_register_call(body: PreRegisterRequest):
+    """
+    Called by the Asterisk dialplan (CURL) before AudioSocket for inbound calls.
+    Pre-creates the call_log row with caller_id and did so the UI shows caller
+    info as soon as the call is connected.
+    """
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        # Resolve agent slug from the DID via phone_routes
+        agent_row = await conn.fetchrow(
+            "SELECT agent_slug FROM phone_routes WHERE did=$1 AND is_active=true LIMIT 1",
+            body.did,
+        ) if body.did else None
+        # Fall back to catch-all route
+        if not agent_row and body.did:
+            agent_row = await conn.fetchrow(
+                "SELECT agent_slug FROM phone_routes WHERE did='_X.' AND is_active=true LIMIT 1"
+            )
+        agent_slug = agent_row["agent_slug"] if agent_row else "unknown"
+
+        await conn.execute(
+            """INSERT INTO call_logs (call_uuid, agent_slug, direction, caller_id, did)
+               VALUES ($1, $2, 'inbound', $3, $4)
+               ON CONFLICT (call_uuid) DO UPDATE SET
+                 caller_id = COALESCE(EXCLUDED.caller_id, call_logs.caller_id),
+                 did       = COALESCE(EXCLUDED.did,       call_logs.did),
+                 agent_slug = COALESCE(EXCLUDED.agent_slug, call_logs.agent_slug)""",
+            body.call_uuid, agent_slug, body.caller_id or None, body.did or None,
+        )
+    return {"status": "ok"}
 
 
 class InitFlowRequest(BaseModel):

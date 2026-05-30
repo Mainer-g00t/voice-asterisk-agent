@@ -154,6 +154,9 @@ def write_extensions_conf(routes: list[dict], default_slug: str = "basic") -> st
         "[from-softphone]",
     ]
 
+    # CONFIG_API_URL inside the voiceai Docker network
+    config_api = "http://config-api:8080"
+
     for route in routes:
         did = route["did"]
         slug = route["agent_slug"]
@@ -169,6 +172,7 @@ def write_extensions_conf(routes: list[dict], default_slug: str = "basic") -> st
             f"exten => {did},1,NoOp(Routing {did} to {slug})",
             f" same => n,Answer()",
             f" same => n,Set(CALL_UUID=${{SHELL(head -c 36 /proc/sys/kernel/random/uuid)}})",
+            f" same => n,Set(CURL_RESULT=${{CURL({config_api}/internal/calls/pre-register,caller_id=${{CALLERID(num)}}&did={did}&call_uuid=${{CALL_UUID}})}})",
             f" same => n,AudioSocket(${{CALL_UUID}},{cname}:9099)",
             f" same => n,Hangup()",
             "",
@@ -183,6 +187,7 @@ def write_extensions_conf(routes: list[dict], default_slug: str = "basic") -> st
         "exten => _X.,1,NoOp(Default route → " + catchall_slug + ")",
         " same => n,Answer()",
         " same => n,Set(CALL_UUID=${SHELL(head -c 36 /proc/sys/kernel/random/uuid)})",
+        f" same => n,Set(CURL_RESULT=${{CURL({config_api}/internal/calls/pre-register,caller_id=${{CALLERID(num)}}&did=_X.&call_uuid=${{CALL_UUID}})}})",
         f" same => n,AudioSocket(${{CALL_UUID}},{catchall_cname}:9099)",
         " same => n,Hangup()",
     ]

@@ -69,10 +69,10 @@ async def originate_call(body: OriginateRequest):
 
         await conn.execute(
             """INSERT INTO call_logs
-                   (call_uuid, agent_slug, direction, destination, end_reason)
-               VALUES ($1, $2, 'outbound', $3, 'pending')
+                   (call_uuid, agent_slug, direction, destination, caller_id, end_reason)
+               VALUES ($1, $2, 'outbound', $3, $4, 'pending')
                ON CONFLICT (call_uuid) DO NOTHING""",
-            call_uuid, body.agent_slug, body.destination,
+            call_uuid, body.agent_slug, body.destination, body.caller_id,
         )
 
     # Store template vars in Redis so the agent can substitute them into the prompt/greeting.

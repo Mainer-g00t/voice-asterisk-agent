@@ -30,6 +30,41 @@ class CallLogIn(BaseModel):
     llm_provider: str | None = None
     tts_provider: str | None = None
     end_reason: str | None = None
+    caller_id: str | None = None
+
+
+class PreRegisterIn(BaseModel):
+    call_uuid: str
+    caller_id: str | None = None   # CALLERID(num) from Asterisk dialplan
+    did: str | None = None         # EXTEN / dialed number
+
+
+@router.post("/pre-register", status_code=200)
+async def pre_register_call(body: PreRegisterIn):
+    """
+    Called by the Asterisk dialplan (via CURL) immediately before AudioSocket for inbound calls.
+    Creates or updates the call_log row with caller_id and did so the UI shows them as soon
+    as the call starts, even before the agent posts the final record.
+    No user context — called from the Asterisk dialplan.
+    """
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        # Look up which agent slug handles this DID
+        agent_row = await conn.fetchrow(
+            "SELECT agent_slug FROM phone_routes WHERE did=$1 AND is_active=true LIMIT 1",
+            body.did,
+        ) if body.did else None
+        agent_slug = agent_row["agent_slug"] if agent_row else "unknown"
+
+        await conn.execute(
+            """INSERT INTO call_logs (call_uuid, agent_slug, direction, caller_id, did)
+               VALUES ($1, $2, 'inbound', $3, $4)
+               ON CONFLICT (call_uuid) DO UPDATE SET
+                 caller_id = COALESCE(EXCLUDED.caller_id, call_logs.caller_id),
+                 did       = COALESCE(EXCLUDED.did,       call_logs.did)""",
+            body.call_uuid, agent_slug, body.caller_id or None, body.did or None,
+        )
+    return {"status": "ok", "call_uuid": body.call_uuid}
 
 
 @router.post("", status_code=201)
@@ -50,8 +85,9 @@ async def receive_call_log(body: CallLogIn):
         await conn.execute(
             """INSERT INTO call_logs
                (call_uuid, agent_slug, did, started_at, ended_at, duration_seconds,
-                turn_count, transcript, stt_provider, llm_provider, tts_provider, end_reason)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                turn_count, transcript, stt_provider, llm_provider, tts_provider, end_reason,
+                caller_id)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
                ON CONFLICT (call_uuid) DO UPDATE SET
                  did              = COALESCE(EXCLUDED.did, call_logs.did),
                  started_at       = COALESCE(EXCLUDED.started_at, call_logs.started_at),
@@ -62,13 +98,14 @@ async def receive_call_log(body: CallLogIn):
                  stt_provider     = EXCLUDED.stt_provider,
                  llm_provider     = EXCLUDED.llm_provider,
                  tts_provider     = EXCLUDED.tts_provider,
-                 end_reason       = EXCLUDED.end_reason""",
+                 end_reason       = EXCLUDED.end_reason,
+                 caller_id        = COALESCE(EXCLUDED.caller_id, call_logs.caller_id)""",
             body.call_uuid, body.agent_slug, did,
             _parse_dt(body.started_at), _parse_dt(body.ended_at), body.duration_seconds,
             body.turn_count,
             json.dumps(body.transcript) if body.transcript is not None else None,
             body.stt_provider, body.llm_provider, body.tts_provider,
-            body.end_reason,
+            body.end_reason, body.caller_id,
         )
 
     meta = await redis_client.get_call_meta(body.call_uuid)
