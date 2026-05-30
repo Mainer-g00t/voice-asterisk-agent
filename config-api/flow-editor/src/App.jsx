@@ -160,7 +160,7 @@ export default function App() {
       <div className="toolbar">
         <span className="toolbar-label">Add node</span>
         {Object.entries(NODE_CONFIGS).map(([type, cfg]) => (
-          <button
+          <button type="button"
             key={type}
             className="toolbar-btn"
             onClick={() => addNode(type)}
@@ -172,7 +172,7 @@ export default function App() {
         ))}
         <div className="toolbar-sep" />
         {hasSelection && (
-          <button
+          <button type="button"
             className="toolbar-btn danger"
             onClick={() => {
               if (selectedNode) onNodeDelete(selectedNode.id)
@@ -234,11 +234,11 @@ export default function App() {
       {/* JSON toggle footer */}
       <div className="json-toggle-row">
         <span>Flow syncs to JSON automatically.</span>
-        <button className="json-toggle-btn" onClick={() => setShowJson((v) => !v)}>
+        <button type="button" className="json-toggle-btn" onClick={() => setShowJson((v) => !v)}>
           {showJson ? 'Hide JSON ▲' : 'View JSON ▼'}
         </button>
         {showJson && (
-          <button
+          <button type="button"
             className="json-toggle-btn"
             onClick={() => {
               const ta = document.getElementById('definitionJson')

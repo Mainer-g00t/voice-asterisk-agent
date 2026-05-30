@@ -1,4 +1,6 @@
 import { Handle, Position } from 'reactflow'
+import { NodeResizer } from '@reactflow/node-resizer'
+import '@reactflow/node-resizer/dist/style.css'
 import { NODE_CONFIGS } from './constants'
 
 function truncate(str, n = 55) {
@@ -46,8 +48,15 @@ function FlowNode({ type, data, selected }) {
   return (
     <div
       className={`flow-node ${selected ? 'selected' : ''}`}
-      style={{ '--node-color': cfg.color }}
+      style={{ '--node-color': cfg.color, height: '100%' }}
     >
+      <NodeResizer
+        minWidth={180}
+        minHeight={70}
+        isVisible={selected}
+        lineStyle={{ borderColor: 'rgba(255,255,255,0.6)' }}
+        handleStyle={{ width: 8, height: 8, borderRadius: 2, background: '#fff', border: '1px solid #9ca3af' }}
+      />
       <Handle
         type="target"
         position={Position.Top}

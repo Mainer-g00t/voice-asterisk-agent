@@ -39,7 +39,7 @@ export default function EdgePanel({ edge, onChange, onDelete, onClose }) {
     <div className="side-panel">
       <div className="panel-header" style={{ borderLeftColor: '#6b7280' }}>
         <div className="panel-title">→ Edge Condition</div>
-        <button className="panel-close" onClick={onClose}>✕</button>
+        <button type="button" className="panel-close" onClick={onClose}>✕</button>
       </div>
 
       <div className="panel-body">
@@ -76,7 +76,7 @@ export default function EdgePanel({ edge, onChange, onDelete, onClose }) {
       </div>
 
       <div className="panel-footer">
-        <button
+        <button type="button"
           className="btn-action btn-danger"
           onClick={() => { if (confirm('Delete this edge?')) onDelete(edge.id) }}
         >

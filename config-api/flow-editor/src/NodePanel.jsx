@@ -23,7 +23,7 @@ export default function NodePanel({ node, entryNodeId, onChange, onSetEntry, onD
           <div className="panel-title">{cfg.icon} {cfg.label}</div>
           {node.data.isEntry && <span className="entry-badge">ENTRY NODE</span>}
         </div>
-        <button className="panel-close" onClick={onClose}>✕</button>
+        <button type="button" className="panel-close" onClick={onClose}>✕</button>
       </div>
 
       <div className="panel-body">
@@ -74,11 +74,11 @@ export default function NodePanel({ node, entryNodeId, onChange, onSetEntry, onD
 
       <div className="panel-footer">
         {node.id !== entryNodeId && (
-          <button className="btn-action btn-primary" onClick={() => onSetEntry(node.id)}>
+          <button type="button" className="btn-action btn-primary" onClick={() => onSetEntry(node.id)}>
             Set as Entry
           </button>
         )}
-        <button
+        <button type="button"
           className="btn-action btn-danger"
           onClick={() => { if (confirm(`Delete node "${node.data.label}"?`)) onDelete(node.id) }}
         >
