@@ -187,6 +187,18 @@ def write_extensions_conf(routes: list[dict], default_slug: str = "basic") -> st
         " same => n,Hangup()",
     ]
 
+    # Outbound context — always included so AMI Originate can use it.
+    lines += [
+        "",
+        "; ── Outbound calls (originated via API) ─────────────────────────────────────",
+        "[outbound-agent]",
+        "exten => s,1,NoOp(Outbound to ${DESTINATION} via agent-${AGENT_SLUG})",
+        " same => n,Answer()",
+        " same => n,Wait(1)",
+        " same => n,AudioSocket(${CALL_UUID},agent-${AGENT_SLUG}:9099)",
+        " same => n,Hangup()",
+    ]
+
     content = "\n".join(lines) + "\n"
     path = os.path.join(WORKSPACE, "asterisk", "extensions.conf")
     with open(path, "w") as f:

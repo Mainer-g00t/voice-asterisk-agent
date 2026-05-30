@@ -48,11 +48,18 @@ async def receive_call_log(body: CallLogIn):
                 turn_count, transcript, stt_provider, llm_provider, tts_provider, end_reason)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                ON CONFLICT (call_uuid) DO UPDATE SET
-                 ended_at = EXCLUDED.ended_at,
+                 did              = COALESCE(EXCLUDED.did, call_logs.did),
+                 started_at       = COALESCE(EXCLUDED.started_at, call_logs.started_at),
+                 ended_at         = EXCLUDED.ended_at,
                  duration_seconds = EXCLUDED.duration_seconds,
-                 turn_count = EXCLUDED.turn_count,
-                 transcript = EXCLUDED.transcript,
-                 end_reason = EXCLUDED.end_reason""",
+                 turn_count       = EXCLUDED.turn_count,
+                 transcript       = EXCLUDED.transcript,
+                 stt_provider     = EXCLUDED.stt_provider,
+                 llm_provider     = EXCLUDED.llm_provider,
+                 tts_provider     = EXCLUDED.tts_provider,
+                 end_reason       = EXCLUDED.end_reason
+                 -- direction and destination are NOT overwritten:
+                 -- they are set at originate time and must be preserved""",
             body.call_uuid, body.agent_slug, did,
             _parse_dt(body.started_at), _parse_dt(body.ended_at), body.duration_seconds,
             body.turn_count,

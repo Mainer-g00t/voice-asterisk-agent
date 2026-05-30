@@ -14,7 +14,8 @@
     <thead class="table-light">
       <tr>
         <th>Time</th>
-        <th>DID</th>
+        <th></th>
+        <th>DID / Destination</th>
         <th>Agent</th>
         <th>Duration</th>
         <th>Turns</th>
@@ -29,7 +30,14 @@
         <td class="text-muted small text-nowrap">
           {{ c.started_at.strftime('%m-%d %H:%M') if c.started_at else '—' }}
         </td>
-        <td><code>{{ c.did or '—' }}</code></td>
+        <td>
+          {% if c.get('direction') == 'outbound' %}
+          <span class="badge bg-primary" title="Outbound">📤</span>
+          {% else %}
+          <span class="badge bg-success" title="Inbound">📞</span>
+          {% endif %}
+        </td>
+        <td><code>{{ c.get('destination') or c.did or '—' }}</code></td>
         <td>
           <a href="/admin/agents/{{ c.agent_slug }}/edit" class="text-decoration-none">
             {{ c.agent_slug }}

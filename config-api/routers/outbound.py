@@ -1,0 +1,113 @@
+"""
+Outbound call API — originates calls via Asterisk AMI.
+
+Flow:
+  1. POST /api/outbound/originate
+  2. API generates call UUID, pre-creates a call_log record (direction='outbound')
+  3. AMI Originate → Asterisk dials the destination
+  4. When answered: Asterisk runs [outbound-agent] dialplan → AudioSocket → agent
+  5. Agent runs STT→LLM→TTS as normal; posts call_log at end (upserts the pre-created row)
+
+The campaign manager (or any caller) gets back a call_uuid immediately and can
+poll GET /api/calls/{call_uuid} for status, transcript, and duration.
+"""
+
+import json
+import os
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+import ami_client
+import db
+
+router = APIRouter()
+
+# Channel format for outbound calls. {destination} is replaced with the dialed number/name.
+# Examples:
+#   PJSIP/{destination}               — dial a registered PJSIP endpoint by name (e.g. "softphone")
+#   PJSIP/{destination}@my-trunk      — dial through a SIP trunk
+#   SIP/{destination}@sip.provider    — legacy SIP channel
+CHANNEL_FORMAT = os.environ.get("OUTBOUND_CHANNEL_FORMAT", "PJSIP/{destination}")
+
+
+class OriginateRequest(BaseModel):
+    destination: str               # number or endpoint name, e.g. "+15551234567" or "softphone"
+    agent_slug: str = "basic"      # which agent to use for the conversation
+    caller_id: str = "Voice Agent <+10000000000>"
+    timeout_seconds: int = 30      # ring timeout before giving up
+    metadata: dict[str, Any] = {} # passed through to call_log for campaign tracking
+
+
+@router.post("/originate", status_code=202)
+async def originate_call(body: OriginateRequest):
+    """
+    Originate an outbound call. Returns immediately with a call_uuid.
+    Poll GET /api/calls/{call_uuid} to track status and retrieve the transcript.
+    """
+    call_uuid = str(uuid.uuid4())
+    channel = CHANNEL_FORMAT.format(destination=body.destination)
+
+    # Pre-create the call_log so the campaign manager can poll for it immediately.
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        # Verify agent exists
+        agent_row = await conn.fetchrow(
+            "SELECT slug FROM agents WHERE slug=$1 AND is_active=true", body.agent_slug
+        )
+        if not agent_row:
+            raise HTTPException(status_code=404, detail=f"Agent '{body.agent_slug}' not found or inactive")
+
+        await conn.execute(
+            """INSERT INTO call_logs
+                   (call_uuid, agent_slug, direction, destination, end_reason)
+               VALUES ($1, $2, 'outbound', $3, 'pending')
+               ON CONFLICT (call_uuid) DO NOTHING""",
+            call_uuid, body.agent_slug, body.destination,
+        )
+
+    # Originate via AMI (non-blocking — Asterisk dials asynchronously).
+    try:
+        await ami_client.originate(
+            channel=channel,
+            call_uuid=call_uuid,
+            agent_slug=body.agent_slug,
+            destination=body.destination,
+            caller_id=body.caller_id,
+            timeout_ms=body.timeout_seconds * 1000,
+        )
+    except Exception as exc:
+        # Mark the pre-created record as failed so it doesn't stay as 'pending'.
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE call_logs SET end_reason='originate_failed' WHERE call_uuid=$1",
+                call_uuid,
+            )
+        raise HTTPException(status_code=502, detail=f"AMI originate failed: {exc}")
+
+    return {
+        "call_uuid": call_uuid,
+        "status": "originating",
+        "channel": channel,
+        "destination": body.destination,
+        "agent_slug": body.agent_slug,
+        "poll_url": f"/api/calls/{call_uuid}",
+    }
+
+
+@router.get("/status/{call_uuid}")
+async def call_status(call_uuid: str):
+    """Quick status check — returns direction, end_reason, duration for a call."""
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT call_uuid, agent_slug, direction, destination, dial_status, "
+            "started_at, ended_at, duration_seconds, turn_count, end_reason "
+            "FROM call_logs WHERE call_uuid=$1",
+            call_uuid,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="Call not found")
+    return dict(row)
