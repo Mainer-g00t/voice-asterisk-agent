@@ -24,7 +24,7 @@ from fastapi.templating import Jinja2Templates
 import auth
 import db
 import redis_client
-from routers import agents, calls, internal, admin_ui, routes, tools, outbound, flows, login, oauth
+from routers import agents, calls, internal, admin_ui, routes, tools, outbound, flows, login, oauth, api_keys
 
 load_dotenv()
 
@@ -58,6 +58,7 @@ app.include_router(agents.router,   prefix="/api/agents",   tags=["agents"])
 app.include_router(tools.router,    prefix="/api/tools",    tags=["tools"])
 app.include_router(routes.router,   prefix="/api/routes",   tags=["routes"])
 app.include_router(calls.router,    prefix="/api/calls",    tags=["calls"])
+app.include_router(api_keys.router, prefix="/api/keys",     tags=["api-keys"])
 app.include_router(outbound.router, prefix="/api/outbound", tags=["outbound"])
 app.include_router(flows.router,    prefix="/api/flows",    tags=["flows"])
 app.include_router(internal.router, prefix="/internal",     tags=["internal"])

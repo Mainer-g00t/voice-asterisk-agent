@@ -620,3 +620,26 @@ async def flow_executions(request: Request, flow_id: str):
         request, "flows/executions.html",
         {"flow": dict(flow), "executions": exec_list},
     )
+
+
+# ── Settings / API keys UI ────────────────────────────────────────────────────
+
+@router.get("/settings/api-keys", response_class=HTMLResponse)
+async def api_keys_page(request: Request):
+    user = getattr(request.state, "user", None)
+    is_user_account = user and user.get("user_id") not in ("admin", "dev", None)
+
+    keys = []
+    if is_user_account:
+        pool = db.get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, label, created_at, last_used_at FROM api_keys WHERE user_id=$1 ORDER BY created_at DESC",
+                user["user_id"],
+            )
+        keys = [dict(r) for r in rows]
+
+    return templates.TemplateResponse(
+        request, "settings/api_keys.html",
+        {"keys": keys, "user_account": is_user_account},
+    )
