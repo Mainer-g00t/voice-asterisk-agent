@@ -42,14 +42,14 @@ async def routes_list(request: Request, flash: str = ""):
         routes = await conn.fetch(
             """SELECT pr.* FROM phone_routes pr
                JOIN agents a ON pr.agent_slug = a.slug
-               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid)
+               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid OR a.owner_id IS NULL)
                ORDER BY pr.did""",
             owner_id,
         )
         agents = await conn.fetch(
             """SELECT slug, display_name FROM agents
                WHERE is_active=true
-               AND ($1::uuid IS NULL OR owner_id = $1::uuid)
+               AND ($1::uuid IS NULL OR owner_id = $1::uuid OR owner_id IS NULL)
                ORDER BY display_name""",
             owner_id,
         )
@@ -76,9 +76,9 @@ async def create_route(
     owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        # Verify the agent belongs to this owner before creating route
+        # Verify the agent is accessible to this owner before creating route
         agent_row = await conn.fetchrow(
-            "SELECT slug FROM agents WHERE slug=$1 AND ($2::uuid IS NULL OR owner_id = $2::uuid)",
+            "SELECT slug FROM agents WHERE slug=$1 AND ($2::uuid IS NULL OR owner_id = $2::uuid OR owner_id IS NULL)",
             agent_slug, owner_id,
         )
         if not agent_row:
@@ -150,7 +150,7 @@ async def calls_list(
     offset = (page - 1) * page_size
 
     # Build WHERE clause from filters
-    conditions = ["($1::uuid IS NULL OR a.owner_id = $1::uuid)"]
+    conditions = ["($1::uuid IS NULL OR a.owner_id = $1::uuid OR a.owner_id IS NULL)"]
     params: list = [owner_id]
     if agent:
         params.append(agent)
@@ -182,7 +182,7 @@ async def calls_list(
         agent_slugs = await conn.fetch(
             """SELECT DISTINCT cl.agent_slug FROM call_logs cl
                JOIN agents a ON cl.agent_slug = a.slug
-               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid)
+               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid OR a.owner_id IS NULL)
                ORDER BY cl.agent_slug""",
             owner_id,
         )
@@ -214,7 +214,7 @@ async def call_detail(request: Request, call_uuid: str):
             """SELECT cl.* FROM call_logs cl
                JOIN agents a ON cl.agent_slug = a.slug
                WHERE cl.call_uuid=$1
-               AND ($2::uuid IS NULL OR a.owner_id = $2::uuid)""",
+               AND ($2::uuid IS NULL OR a.owner_id = $2::uuid OR a.owner_id IS NULL)""",
             call_uuid, owner_id,
         )
     if not row:
@@ -316,7 +316,7 @@ async def edit_agent_form(request: Request, slug: str, flash: str = ""):
         flows = await conn.fetch(
             """SELECT id, name FROM flows
                WHERE is_active=true
-               AND ($1::uuid IS NULL OR owner_id = $1::uuid)
+               AND ($1::uuid IS NULL OR owner_id = $1::uuid OR owner_id IS NULL)
                ORDER BY name""",
             owner_id,
         )
@@ -399,7 +399,7 @@ async def save_agent(
         flows = await conn.fetch(
             """SELECT id, name FROM flows
                WHERE is_active=true
-               AND ($1::uuid IS NULL OR owner_id = $1::uuid)
+               AND ($1::uuid IS NULL OR owner_id = $1::uuid OR owner_id IS NULL)
                ORDER BY name""",
             owner_id,
         )
@@ -432,7 +432,7 @@ async def flows_list(request: Request, flash: str = ""):
     async with pool.acquire() as conn:
         flows = await conn.fetch(
             """SELECT id, name, description, is_active, updated_at FROM flows
-               WHERE ($1::uuid IS NULL OR owner_id = $1::uuid)
+               WHERE ($1::uuid IS NULL OR owner_id = $1::uuid OR owner_id IS NULL)
                ORDER BY name""",
             owner_id,
         )
@@ -514,7 +514,7 @@ async def edit_flow_form(request: Request, flow_id: str, flash: str = ""):
     pool = db.get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id = $2::uuid)",
+            "SELECT * FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id = $2::uuid OR owner_id IS NULL)",
             flow_id, owner_id,
         )
     if not row:
@@ -599,7 +599,7 @@ async def flow_executions(request: Request, flow_id: str):
     pool = db.get_pool()
     async with pool.acquire() as conn:
         flow = await conn.fetchrow(
-            "SELECT id, name FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id = $2::uuid)",
+            "SELECT id, name FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id = $2::uuid OR owner_id IS NULL)",
             flow_id, owner_id,
         )
         execs = await conn.fetch(

@@ -151,7 +151,7 @@ async def list_agents(owner_id: str | None = None) -> list[dict]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT slug, display_name, is_active, updated_at FROM agents "
-            "WHERE ($1::uuid IS NULL OR owner_id = $1::uuid) "
+            "WHERE ($1::uuid IS NULL OR owner_id = $1::uuid OR owner_id IS NULL) "
             "ORDER BY display_name",
             owner_id,
         )
@@ -163,7 +163,7 @@ async def get_agent_full(slug: str, owner_id: str | None = None) -> dict | None:
     pool = get_pool()
     async with pool.acquire() as conn:
         agent = await conn.fetchrow(
-            "SELECT * FROM agents WHERE slug = $1 AND ($2::uuid IS NULL OR owner_id = $2::uuid)",
+            "SELECT * FROM agents WHERE slug = $1 AND ($2::uuid IS NULL OR owner_id = $2::uuid OR owner_id IS NULL)",
             slug, owner_id,
         )
         if not agent:

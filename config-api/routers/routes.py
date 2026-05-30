@@ -36,7 +36,7 @@ async def list_routes(request: Request):
         rows = await conn.fetch(
             """SELECT pr.* FROM phone_routes pr
                JOIN agents a ON pr.agent_slug = a.slug
-               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid)
+               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid OR a.owner_id IS NULL)
                ORDER BY pr.did""",
             owner_id,
         )
@@ -48,9 +48,9 @@ async def create_route(request: Request, body: RouteCreate):
     owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        # Verify agent exists and belongs to this user
+        # Verify agent is accessible to this user
         agent = await conn.fetchrow(
-            "SELECT slug FROM agents WHERE slug=$1 AND ($2::uuid IS NULL OR owner_id=$2::uuid)",
+            "SELECT slug FROM agents WHERE slug=$1 AND ($2::uuid IS NULL OR owner_id=$2::uuid OR owner_id IS NULL)",
             body.agent_slug, owner_id,
         )
         if not agent:
@@ -131,7 +131,7 @@ async def apply_routes(request: Request):
                FROM phone_routes pr
                JOIN agents a ON pr.agent_slug = a.slug
                WHERE pr.is_active=true
-               AND ($1::uuid IS NULL OR a.owner_id = $1::uuid)
+               AND ($1::uuid IS NULL OR a.owner_id = $1::uuid OR a.owner_id IS NULL)
                ORDER BY pr.did""",
             owner_id,
         )

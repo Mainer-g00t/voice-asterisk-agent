@@ -44,7 +44,7 @@ async def list_flows(request: Request):
         rows = await conn.fetch(
             "SELECT id, name, description, is_active, created_at, updated_at "
             "FROM flows "
-            "WHERE ($1::uuid IS NULL OR owner_id = $1::uuid) "
+            "WHERE ($1::uuid IS NULL OR owner_id = $1::uuid OR owner_id IS NULL) "
             "ORDER BY name",
             owner_id,
         )
@@ -76,7 +76,7 @@ async def get_flow(request: Request, flow_id: str):
     pool = db.get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id=$2::uuid)",
+            "SELECT * FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id=$2::uuid OR owner_id IS NULL)",
             flow_id, owner_id,
         )
     if not row:
@@ -129,9 +129,9 @@ async def list_executions(request: Request, flow_id: str, limit: int = 50):
     owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        # Verify flow ownership first
+        # Verify flow is accessible to this user
         flow = await conn.fetchrow(
-            "SELECT id FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id=$2::uuid)",
+            "SELECT id FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id=$2::uuid OR owner_id IS NULL)",
             flow_id, owner_id,
         )
         if not flow:

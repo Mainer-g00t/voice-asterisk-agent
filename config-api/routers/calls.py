@@ -105,7 +105,7 @@ async def list_calls(request: Request, limit: int = 50, offset: int = 0):
                       cl.tts_provider, cl.end_reason
                FROM call_logs cl
                LEFT JOIN agents a ON cl.agent_slug = a.slug
-               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid)
+               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid OR a.owner_id IS NULL)
                ORDER BY cl.started_at DESC NULLS LAST
                LIMIT $2 OFFSET $3""",
             owner_id, limit, offset,
@@ -113,7 +113,7 @@ async def list_calls(request: Request, limit: int = 50, offset: int = 0):
         total = await conn.fetchval(
             """SELECT COUNT(*) FROM call_logs cl
                LEFT JOIN agents a ON cl.agent_slug = a.slug
-               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid)""",
+               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid OR a.owner_id IS NULL)""",
             owner_id,
         )
     return {"total": total, "calls": [dict(r) for r in rows]}
@@ -128,7 +128,7 @@ async def get_call(request: Request, call_uuid: str):
             """SELECT cl.* FROM call_logs cl
                LEFT JOIN agents a ON cl.agent_slug = a.slug
                WHERE cl.call_uuid=$1
-               AND ($2::uuid IS NULL OR a.owner_id = $2::uuid)""",
+               AND ($2::uuid IS NULL OR a.owner_id = $2::uuid OR a.owner_id IS NULL)""",
             call_uuid, owner_id,
         )
     if not row:

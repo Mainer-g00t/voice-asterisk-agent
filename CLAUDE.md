@@ -62,7 +62,9 @@ Agent configuration (prompts, provider selection, tool schemas, specialist promp
 
 **Push-on-save:** when an admin saves an agent, `config-api` writes to Postgres then immediately pushes a denormalized snapshot to Redis. Next call picks up the new config — no restart needed.
 
-**Postgres migrations:** `config-api/migrations/00N_*.sql`. Files 001–003 are auto-applied on first Postgres init. For existing installs, run `make migrate` after pulling new ones.
+**Postgres migrations:** `config-api/migrations/00N_*.sql`. Always safe to re-run via `make migrate`. Migration 001 auto-applies on first Postgres init; all others require explicit `make migrate`.
+
+**Demo seed data:** Migration `010_demo_seed.sql` seeds the global tool library (`get_current_time`, `get_weather`) and provider configs for all demo agents. Seeded rows have `owner_id=NULL` (shared) and are visible to ALL authenticated users. Run `make migrate` on a new laptop to get demo content immediately.
 
 **Postgres tables:**
 - `agents`, `provider_configs`, `tool_definitions`, `specialist_configs`, `config_versions` — agent config
@@ -72,6 +74,7 @@ Agent configuration (prompts, provider selection, tool schemas, specialist promp
 - `flows` — flow definitions (JSON blob: nodes + edges)
 - `flow_executions` — per-call execution state (current node, runtime variables, status)
 - `flow_events` — audit log of every node entry, edge traversal, and event received
+- `users` — GitHub OAuth accounts (id, email, name, avatar_url, github_id)
 
 ### Call Flows (`config-api/flow_engine.py`, `agent/flow_controller.py`)
 
@@ -285,6 +288,33 @@ Configured in the admin UI — no `.env` changes or restarts needed. `AGENT_SLUG
 ### Adding a new agent
 
 Via admin UI: `/admin/agents` → New agent. No code change needed.
+
+### Authentication and per-user isolation (`config-api/auth.py`)
+
+Three auth modes, selected by `.env` variables:
+
+| Mode | Condition | Behavior |
+|---|---|---|
+| **Dev** | `ADMIN_PASSWORD` and `GITHUB_CLIENT_ID` both empty | All requests pass, `owner_id=None` (sees everything) |
+| **Password** | `ADMIN_PASSWORD` set | Login form at `/admin/login`; HMAC-signed session cookie; no DB/Redis needed |
+| **GitHub OAuth** | `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET` set | Login with GitHub button; creates `users` table row; Redis-backed session (30-day TTL) |
+
+`API_KEY` env var protects `/api/*` routes when set (pass via `X-Api-Key` header).
+
+**Per-user data isolation:** agents, flows, phone_routes, and call_logs are filtered by `owner_id`. The helper `auth.get_owner_id(request)` returns the caller's UUID or `None` for admin/dev (sees all). All queries use the pattern:
+
+```sql
+WHERE ($N::uuid IS NULL OR owner_id = $N::uuid OR owner_id IS NULL)
+```
+
+The `OR owner_id IS NULL` clause makes demo data (seeded with `owner_id=NULL`) visible to all authenticated users. Write operations (UPDATE/DELETE) keep strict ownership — users can only modify their own resources.
+
+**Key files:**
+- `config-api/auth.py` — `get_session_user()`, `get_owner_id()`, `admin_auth_middleware`, `api_auth_middleware`
+- `config-api/routers/login.py` — `/admin/login`, `/admin/logout`
+- `config-api/routers/oauth.py` — `/admin/auth/github`, `/admin/auth/github/callback`
+- `config-api/migrations/008_users.sql` — users table
+- `config-api/migrations/009_ownership.sql` — owner_id columns on agents/flows/phone_routes
 
 ### Multi-agent / tool-calling agents
 

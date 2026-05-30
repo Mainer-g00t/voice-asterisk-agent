@@ -30,26 +30,45 @@ No cloud API keys required — everything runs locally by default.
 
 ```bash
 # 1. Clone
-git clone https://github.com/<you>/voice-asterisk-agent.git
+git clone https://github.com/luisbeqja/voice-asterisk-agent.git
 cd voice-asterisk-agent
 
 # 2. Copy env and fill in your settings
 cp .env.example .env
-# Set ASTERISK_EXTERNAL_IP to your Mac's LAN IP:  ipconfig getifaddr en0
-# Set POSTGRES_PASSWORD to a strong password
+# REQUIRED: set your Mac's LAN IP (so SIP works across machines)
+#   macOS: ipconfig getifaddr en0
+# RECOMMENDED: set ADMIN_PASSWORD, API_KEY, POSTGRES_PASSWORD
 
 # 3. Build and start all services
 # (includes compiling the React flow editor bundle inside Docker — no Node.js needed)
 make up
 
-# 4. Open the admin UI
+# 4. Apply DB migrations and seed demo data
+make migrate
+
+# 5. Open the admin UI
 open http://localhost:8080/admin
 ```
 
-On a **new laptop after pulling**, also run:
+On a **new laptop after pulling**, run:
 ```bash
-make migrate   # applies any new SQL migrations to the running Postgres
+make up      # rebuilds images
+make migrate # applies any new DB migrations + seeds demo data
 ```
+
+### What you get out of the box
+
+`make migrate` seeds 5 demo agents, the default phone route, and the global tool library:
+
+| Slug | Description |
+|---|---|
+| `basic` | Open-ended Q&A assistant (local STT/LLM/TTS) |
+| `customer_service` | Guided tech-support agent (Alex) |
+| `storyteller` | Collaborative story builder |
+| `language_tutor` | English conversation practice tutor |
+| `orchestrator` | Hotel concierge — delegates to specialist subagents (requires Anthropic API key) |
+
+Global tools pre-loaded: `get_current_time`, `get_weather` (served by `tools-server`).
 
 ---
 
@@ -455,15 +474,61 @@ Migrations live in `config-api/migrations/`. Run `make migrate` after pulling ne
 
 ---
 
+## Authentication and accounts
+
+### Dev mode (no auth)
+
+Leave `ADMIN_PASSWORD` and `GITHUB_CLIENT_ID` blank in `.env` — the admin UI and REST API are fully open. Use this for local development.
+
+### Admin password (single user)
+
+Set `ADMIN_PASSWORD=your-password` and `API_KEY=<random-hex>` in `.env`:
+
+```bash
+# Generate a secure API key
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
+- Admin UI: prompted for password at `/admin/login`
+- REST API: pass `X-Api-Key: <value>` header
+- Admin backdoor sees **all** resources across all users
+
+### GitHub OAuth (multi-user)
+
+1. Create a GitHub OAuth App at **github.com/settings/developers → OAuth Apps**
+   - Homepage: your server URL
+   - Callback URL: `http://localhost:8080/admin/auth/github/callback`
+2. Set in `.env`:
+   ```
+   GITHUB_CLIENT_ID=your-client-id
+   GITHUB_CLIENT_SECRET=your-client-secret
+   BASE_URL=http://localhost:8080
+   ```
+3. Restart: `docker compose up -d config-api`
+
+Each GitHub account gets its own isolated workspace (agents, flows, routes, calls). Demo agents seeded by `make migrate` have no owner and are **visible to all users** — great for getting started. Each user can create their own agents and only sees their own data plus the shared demo content.
+
+### REST API with auth
+
+```bash
+# With API key (admin-level — sees all users' data)
+curl -H "X-Api-Key: $API_KEY" http://localhost:8080/api/agents
+
+# Check API docs for full reference
+open http://localhost:8080/docs
+```
+
+---
+
 ## Workflow across laptops
 
 ```bash
-make pull      # git pull + docker compose pull
-make up        # rebuild and start everything
-make migrate   # apply any new DB migrations
+git pull
+make up        # rebuild images
+make migrate   # apply new DB migrations + seed demo data
 ```
 
-Set your own `ASTERISK_EXTERNAL_IP` and `POSTGRES_PASSWORD` in `.env`. Agent configs and call history live in Postgres (persisted in the `postgres_data` Docker volume).
+Set your own `ASTERISK_EXTERNAL_IP`, `POSTGRES_PASSWORD`, and optionally `ADMIN_PASSWORD`/`API_KEY` in `.env`. Agent configs and call history live in Postgres (persisted in the `postgres_data` Docker volume). The demo agents from `make migrate` are always re-seeded if missing.
 
 ---
 
