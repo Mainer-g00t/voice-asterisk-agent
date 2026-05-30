@@ -9,6 +9,7 @@ Mounts required in docker-compose.yml:
 """
 
 import os
+import re
 
 import docker
 from docker.errors import NotFound, ImageNotFound
@@ -142,6 +143,23 @@ def reload_asterisk_dialplan() -> str:
         raise RuntimeError(f"Asterisk container '{ASTERISK_CONTAINER}' not found")
 
 
+_SAFE_DID  = re.compile(r'^[0-9+*#_X.]+$')
+_SAFE_SLUG = re.compile(r'^[a-z0-9-]+$')
+
+
+def _sanitize_dialplan_str(value: str) -> str:
+    """Strip newlines and other control characters from a string destined for extensions.conf."""
+    return re.sub(r'[\r\n\x00-\x1f\x7f]', '', value)
+
+
+def _validate_route_fields(did: str, slug: str) -> None:
+    """Raise ValueError if did or slug contain characters that could inject dialplan lines."""
+    if not _SAFE_DID.match(did) and did != "_X.":
+        raise ValueError(f"Invalid DID '{did}': only digits, +, *, #, _, X, . are allowed")
+    if not _SAFE_SLUG.match(slug):
+        raise ValueError(f"Invalid agent_slug '{slug}': only lowercase letters, digits, and hyphens are allowed")
+
+
 def write_extensions_conf(routes: list[dict], default_slug: str = "basic") -> str:
     """
     Generate and write extensions.conf from active phone routes.
@@ -160,8 +178,14 @@ def write_extensions_conf(routes: list[dict], default_slug: str = "basic") -> st
     for route in routes:
         did = route["did"]
         slug = route["agent_slug"]
-        desc = route.get("description") or f"Route {did} → {slug}"
+        desc = _sanitize_dialplan_str(route.get("description") or f"Route {did} → {slug}")
         cname = container_name(slug)
+
+        try:
+            _validate_route_fields(did, slug)
+        except ValueError as exc:
+            logger.warning(f"Skipping route with invalid fields: {exc}")
+            continue
 
         if did == "_X.":
             # Catch-all — add last
@@ -181,6 +205,9 @@ def write_extensions_conf(routes: list[dict], default_slug: str = "basic") -> st
     # Catch-all last (either from routes or the default)
     catchall = next((r for r in routes if r["did"] == "_X."), None)
     catchall_slug = catchall["agent_slug"] if catchall else default_slug
+    if not _SAFE_SLUG.match(catchall_slug):
+        logger.warning(f"Invalid catch-all slug '{catchall_slug}', falling back to 'basic'")
+        catchall_slug = "basic"
     catchall_cname = container_name(catchall_slug)
     lines += [
         "; Default catch-all",

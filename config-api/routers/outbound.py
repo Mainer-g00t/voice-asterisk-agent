@@ -12,10 +12,13 @@ The campaign manager (or any caller) gets back a call_uuid immediately and can
 poll GET /api/calls/{call_uuid} for status, transcript, and duration.
 """
 
+import ipaddress
 import json
 import os
+import socket
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
 from loguru import logger
@@ -28,6 +31,43 @@ import redis_client
 from voiceai_common.flow_engine import get_entry_node
 
 router = APIRouter()
+
+
+def _validate_callback_url(url: str) -> None:
+    """
+    Reject callback URLs that point to private/loopback/link-local addresses (SSRF guard).
+    Only https:// or http:// scheme is accepted; bare IPs and RFC-1918 ranges are blocked.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        raise HTTPException(status_code=400, detail="callback_url is not a valid URL")
+
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="callback_url must use http or https scheme")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=400, detail="callback_url must include a hostname")
+
+    # Resolve hostname to detect internal addresses
+    try:
+        addrs = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail=f"callback_url hostname '{hostname}' could not be resolved")
+
+    for family, _type, _proto, _canonname, sockaddr in addrs:
+        raw_ip = sockaddr[0]
+        try:
+            addr = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            continue
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            raise HTTPException(
+                status_code=400,
+                detail=f"callback_url must point to a public internet address ('{hostname}' resolved to private IP)"
+            )
+
 
 # Channel format for outbound calls. {destination} is replaced with the dialed number/name.
 # Examples:
@@ -54,6 +94,9 @@ async def originate_call(body: OriginateRequest):
     Originate an outbound call. Returns immediately with a call_uuid.
     Poll GET /api/calls/{call_uuid} to track status and retrieve the transcript.
     """
+    if body.callback_url:
+        _validate_callback_url(body.callback_url)
+
     call_uuid = str(uuid.uuid4())
     channel = CHANNEL_FORMAT.format(destination=body.destination)
 
