@@ -467,6 +467,34 @@ Set your own `ASTERISK_EXTERNAL_IP` and `POSTGRES_PASSWORD` in `.env`. Agent con
 
 ---
 
+## Testing
+
+### End-to-end call test
+
+Runs the full stack automatically — SIP registration, an inbound call, and an outbound call — and reports pass/fail:
+
+```bash
+./scripts/test-e2e.sh
+```
+
+Requires `baresip` and `ffmpeg` (`brew install baresip ffmpeg`). The script:
+
+1. Verifies all services are reachable and routes are applied
+2. Generates real speech audio via the local TTS service (falls back to synthetic tone)
+3. **Inbound:** baresip dials `sip:1000@<LAN_IP>` → Asterisk → agent; confirms pipeline started, call logged, at least 1 STT→LLM→TTS turn completed
+4. **Outbound:** `POST /api/outbound/originate` → Asterisk AMI → baresip auto-answers → agent; confirms AudioSocket channel active, call logged with `direction=outbound`
+5. Prints a summary of the last 5 calls from the DB
+
+Run `./scripts/test-e2e.sh --no-cleanup` to keep the temp directory for log inspection on failure.
+
+### Test individual AI services
+
+```bash
+./scripts/test-tts.sh "Hello, is this working?"
+./scripts/test-stt.sh path/to/audio.wav
+./scripts/test-llm.sh "Who are you?"
+```
+
 ## Debugging
 
 ```bash
@@ -476,11 +504,6 @@ docker logs agent-basic --tail=50  # route-managed agent container
 make logs-tts / logs-llm / logs-stt / logs-asterisk
 make cli                           # Asterisk CLI
 make shell                         # shell into agent container
-
-# Test AI services directly
-./scripts/test-tts.sh "Hello, is this working?"
-./scripts/test-stt.sh path/to/audio.wav
-./scripts/test-llm.sh "Who are you?"
 
 # API docs (includes outbound originate, call status, flows, tool management)
 open http://localhost:8080/docs

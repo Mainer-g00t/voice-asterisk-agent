@@ -40,6 +40,10 @@ docker compose build agent
 docker rm -f agent-basic agent-sales   # remove stale containers
 curl -X POST http://localhost:8080/api/routes/apply   # restart with new image
 
+# End-to-end call test (baresip + ffmpeg required: brew install baresip ffmpeg)
+./scripts/test-e2e.sh            # inbound + outbound call, full STT→LLM→TTS verification
+./scripts/test-e2e.sh --no-cleanup  # keep /tmp/e2e-voiceai-* for log inspection on failure
+
 # Test individual AI services
 ./scripts/test-stt.sh
 ./scripts/test-tts.sh
@@ -297,6 +301,12 @@ Set in `.env` to your Mac's LAN IP (`ipconfig getifaddr en0`) when the softphone
 ## Key gotcha: outbound calls need a SIP trunk for real numbers
 
 The default `OUTBOUND_CHANNEL_FORMAT=PJSIP/{destination}` works for dialing registered PJSIP endpoints (e.g. `destination=softphone` rings the softphone). To dial real E.164 numbers, configure a SIP provider trunk in `pjsip.conf` and set `OUTBOUND_CHANNEL_FORMAT=PJSIP/{destination}@your-trunk`.
+
+## Key gotcha: baresip needs LAN IP, not 127.0.0.1
+
+When using baresip as a test client, register the account using the Mac's LAN IP (`ipconfig getifaddr en1`) rather than `127.0.0.1`. Baresip fails to route SIP requests to `127.0.0.1` because it can't find a matching local address (`ua: no laddr for 127.0.0.1`). The Docker port mapping makes Asterisk reachable on the LAN IP.
+
+Also: `answermode=auto` must be set in the **accounts** file (not `config`). `menu_autoanswer` in config has no effect. The `menu.so` and `debug_cmd.so` modules must be loaded for `dial`/`hangup` commands to be available over `ctrl_tcp`.
 
 ## Shared package: `packages/voiceai_common`
 
