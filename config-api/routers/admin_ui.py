@@ -12,6 +12,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+import auth
 import db
 import docker_manager
 from voiceai_common.flow_engine import validate_flow
@@ -35,10 +36,23 @@ async def admin_root(request: Request):
 
 @router.get("/routes", response_class=HTMLResponse)
 async def routes_list(request: Request, flash: str = ""):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        routes = await conn.fetch("SELECT * FROM phone_routes ORDER BY did")
-        agents = await conn.fetch("SELECT slug, display_name FROM agents WHERE is_active=true ORDER BY display_name")
+        routes = await conn.fetch(
+            """SELECT pr.* FROM phone_routes pr
+               JOIN agents a ON pr.agent_slug = a.slug
+               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid)
+               ORDER BY pr.did""",
+            owner_id,
+        )
+        agents = await conn.fetch(
+            """SELECT slug, display_name FROM agents
+               WHERE is_active=true
+               AND ($1::uuid IS NULL OR owner_id = $1::uuid)
+               ORDER BY display_name""",
+            owner_id,
+        )
     containers = docker_manager.list_running_agents()
     return templates.TemplateResponse(
         request,
@@ -59,12 +73,20 @@ async def create_route(
     agent_slug: str = Form(...),
     description: str = Form(""),
 ):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
+        # Verify the agent belongs to this owner before creating route
+        agent_row = await conn.fetchrow(
+            "SELECT slug FROM agents WHERE slug=$1 AND ($2::uuid IS NULL OR owner_id = $2::uuid)",
+            agent_slug, owner_id,
+        )
+        if not agent_row:
+            return RedirectResponse("/admin/routes?flash=Agent+not+found", status_code=303)
         try:
             await conn.execute(
-                "INSERT INTO phone_routes (did, agent_slug, description) VALUES ($1, $2, $3)",
-                did, agent_slug, description or None,
+                "INSERT INTO phone_routes (did, agent_slug, description, owner_id) VALUES ($1, $2, $3, $4::uuid)",
+                did, agent_slug, description or None, owner_id,
             )
         except Exception as e:
             if "unique" in str(e).lower():
@@ -82,22 +104,34 @@ async def edit_route(
     description: str = Form(""),
     is_active: str = Form("off"),
 ):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            """UPDATE phone_routes
+            """UPDATE phone_routes pr
                SET agent_slug=$2, description=$3, is_active=$4
-               WHERE id=$1""",
-            route_id, agent_slug, description or None, is_active == "on",
+               FROM agents a
+               WHERE pr.id=$1
+               AND pr.agent_slug = a.slug
+               AND ($5::uuid IS NULL OR a.owner_id = $5::uuid)""",
+            route_id, agent_slug, description or None, is_active == "on", owner_id,
         )
     return RedirectResponse("/admin/routes?flash=Route+updated", status_code=303)
 
 
 @router.post("/routes/{route_id}/delete", response_class=HTMLResponse)
 async def delete_route(request: Request, route_id: str):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM phone_routes WHERE id=$1", route_id)
+        await conn.execute(
+            """DELETE FROM phone_routes pr
+               USING agents a
+               WHERE pr.id=$1
+               AND pr.agent_slug = a.slug
+               AND ($2::uuid IS NULL OR a.owner_id = $2::uuid)""",
+            route_id, owner_id,
+        )
     return RedirectResponse("/admin/routes?flash=Route+deleted", status_code=303)
 
 
@@ -110,37 +144,47 @@ async def calls_list(
     agent: str = "",
     direction: str = "",
 ):
+    owner_id = auth.get_owner_id(request)
     page_size = 50
     page = max(1, page)
     offset = (page - 1) * page_size
 
     # Build WHERE clause from filters
-    conditions = []
-    params: list = []
+    conditions = ["($1::uuid IS NULL OR a.owner_id = $1::uuid)"]
+    params: list = [owner_id]
     if agent:
         params.append(agent)
-        conditions.append(f"agent_slug = ${len(params)}")
+        conditions.append(f"cl.agent_slug = ${len(params)}")
     if direction:
         params.append(direction)
-        conditions.append(f"direction = ${len(params)}")
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        conditions.append(f"cl.direction = ${len(params)}")
+    where = "WHERE " + " AND ".join(conditions)
 
     pool = db.get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"""SELECT call_uuid, agent_slug, did, destination, direction,
-                      started_at, ended_at, duration_seconds, turn_count,
-                      stt_provider, llm_provider, tts_provider, end_reason
-               FROM call_logs {where}
-               ORDER BY started_at DESC NULLS LAST
+            f"""SELECT cl.call_uuid, cl.agent_slug, cl.did, cl.destination, cl.direction,
+                      cl.started_at, cl.ended_at, cl.duration_seconds, cl.turn_count,
+                      cl.stt_provider, cl.llm_provider, cl.tts_provider, cl.end_reason
+               FROM call_logs cl
+               JOIN agents a ON cl.agent_slug = a.slug
+               {where}
+               ORDER BY cl.started_at DESC NULLS LAST
                LIMIT {page_size} OFFSET {offset}""",
             *params,
         )
         total = await conn.fetchval(
-            f"SELECT COUNT(*) FROM call_logs {where}", *params
+            f"""SELECT COUNT(*) FROM call_logs cl
+                JOIN agents a ON cl.agent_slug = a.slug
+                {where}""",
+            *params,
         )
         agent_slugs = await conn.fetch(
-            "SELECT DISTINCT agent_slug FROM call_logs ORDER BY agent_slug"
+            """SELECT DISTINCT cl.agent_slug FROM call_logs cl
+               JOIN agents a ON cl.agent_slug = a.slug
+               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid)
+               ORDER BY cl.agent_slug""",
+            owner_id,
         )
     import math
     total_pages = max(1, math.ceil(total / page_size))
@@ -163,9 +207,16 @@ async def calls_list(
 @router.get("/calls/{call_uuid}", response_class=HTMLResponse)
 async def call_detail(request: Request, call_uuid: str):
     import json as _json
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM call_logs WHERE call_uuid=$1", call_uuid)
+        row = await conn.fetchrow(
+            """SELECT cl.* FROM call_logs cl
+               JOIN agents a ON cl.agent_slug = a.slug
+               WHERE cl.call_uuid=$1
+               AND ($2::uuid IS NULL OR a.owner_id = $2::uuid)""",
+            call_uuid, owner_id,
+        )
     if not row:
         return RedirectResponse("/admin/calls")
     call = dict(row)
@@ -227,7 +278,8 @@ async def unassign_global_tool_ui(request: Request, slug: str, tool_id: str):
 
 @router.get("/agents", response_class=HTMLResponse)
 async def agents_list(request: Request):
-    agents = await db.list_agents()
+    owner_id = auth.get_owner_id(request)
+    agents = await db.list_agents(owner_id)
     return templates.TemplateResponse(request, "agents/list.html", {"agents": agents})
 
 
@@ -252,7 +304,8 @@ async def new_agent_form(request: Request):
 
 @router.get("/agents/{slug}/edit", response_class=HTMLResponse)
 async def edit_agent_form(request: Request, slug: str, flash: str = ""):
-    data = await db.get_agent_full(slug)
+    owner_id = auth.get_owner_id(request)
+    data = await db.get_agent_full(slug, owner_id)
     if not data:
         return RedirectResponse("/admin/agents")
 
@@ -260,7 +313,13 @@ async def edit_agent_form(request: Request, slug: str, flash: str = ""):
     global_tools = await db.list_global_tools()
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        flows = await conn.fetch("SELECT id, name FROM flows WHERE is_active=true ORDER BY name")
+        flows = await conn.fetch(
+            """SELECT id, name FROM flows
+               WHERE is_active=true
+               AND ($1::uuid IS NULL OR owner_id = $1::uuid)
+               ORDER BY name""",
+            owner_id,
+        )
 
     return templates.TemplateResponse(
         request,
@@ -297,6 +356,7 @@ async def save_agent(
     tts_provider: str = Form("local"),
     tts_model: str = Form(""),
 ):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -306,9 +366,10 @@ async def save_agent(
                 """UPDATE agents
                    SET display_name=$2, system_prompt=$3, greeting_trigger=$4,
                        is_active=$5, flow_id=$6::uuid
-                   WHERE slug=$1""",
+                   WHERE slug=$1
+                   AND ($7::uuid IS NULL OR owner_id = $7::uuid)""",
                 slug, display_name, system_prompt, greeting_trigger, active,
-                clean_flow_id,
+                clean_flow_id, owner_id,
             )
             def _clean_model(v: str) -> str | None:
                 """Return None for empty or literal 'None' strings."""
@@ -321,19 +382,27 @@ async def save_agent(
             ]:
                 await conn.execute(
                     """INSERT INTO provider_configs (agent_id, provider_type, provider_name, model)
-                       SELECT id, $2, $3, $4 FROM agents WHERE slug=$1
+                       SELECT id, $2, $3, $4 FROM agents
+                       WHERE slug=$1
+                       AND ($5::uuid IS NULL OR owner_id = $5::uuid)
                        ON CONFLICT (agent_id, provider_type)
                        DO UPDATE SET provider_name=EXCLUDED.provider_name, model=EXCLUDED.model""",
-                    slug, ptype, pname, model,
+                    slug, ptype, pname, model, owner_id,
                 )
 
     await _push_snapshot(slug)
-    data = await db.get_agent_full(slug)
+    data = await db.get_agent_full(slug, owner_id)
     providers_by_type = {p["provider_type"]: p for p in data["providers"]}
     global_tools = await db.list_global_tools()
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        flows = await conn.fetch("SELECT id, name FROM flows WHERE is_active=true ORDER BY name")
+        flows = await conn.fetch(
+            """SELECT id, name FROM flows
+               WHERE is_active=true
+               AND ($1::uuid IS NULL OR owner_id = $1::uuid)
+               ORDER BY name""",
+            owner_id,
+        )
 
     return templates.TemplateResponse(
         request,
@@ -358,10 +427,14 @@ async def save_agent(
 
 @router.get("/flows", response_class=HTMLResponse)
 async def flows_list(request: Request, flash: str = ""):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         flows = await conn.fetch(
-            "SELECT id, name, description, is_active, updated_at FROM flows ORDER BY name"
+            """SELECT id, name, description, is_active, updated_at FROM flows
+               WHERE ($1::uuid IS NULL OR owner_id = $1::uuid)
+               ORDER BY name""",
+            owner_id,
         )
         # Count executions per flow
         counts = await conn.fetch(
@@ -408,6 +481,7 @@ async def create_flow_ui(
     description: str = Form(""),
     definition_json: str = Form("{}"),
 ):
+    owner_id = auth.get_owner_id(request)
     errors = []
     definition = {}
     try:
@@ -428,17 +502,21 @@ async def create_flow_ui(
     pool = db.get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "INSERT INTO flows (name, description, definition) VALUES ($1,$2,$3) RETURNING id",
-            name, description or None, _json.dumps(definition),
+            "INSERT INTO flows (name, description, definition, owner_id) VALUES ($1,$2,$3,$4::uuid) RETURNING id",
+            name, description or None, _json.dumps(definition), owner_id,
         )
     return RedirectResponse(f"/admin/flows/{row['id']}/edit?flash=Flow+created", status_code=303)
 
 
 @router.get("/flows/{flow_id}/edit", response_class=HTMLResponse)
 async def edit_flow_form(request: Request, flow_id: str, flash: str = ""):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM flows WHERE id=$1::uuid", flow_id)
+        row = await conn.fetchrow(
+            "SELECT * FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id = $2::uuid)",
+            flow_id, owner_id,
+        )
     if not row:
         return RedirectResponse("/admin/flows")
     flow = dict(row)
@@ -462,6 +540,7 @@ async def save_flow_ui(
     description: str = Form(""),
     definition_json: str = Form("{}"),
 ):
+    owner_id = auth.get_owner_id(request)
     errors = []
     definition = {}
     try:
@@ -474,7 +553,10 @@ async def save_flow_ui(
 
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        flow_row = await conn.fetchrow("SELECT * FROM flows WHERE id=$1::uuid", flow_id)
+        flow_row = await conn.fetchrow(
+            "SELECT * FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id = $2::uuid)",
+            flow_id, owner_id,
+        )
 
     if not flow_row:
         return RedirectResponse("/admin/flows")
@@ -489,27 +571,37 @@ async def save_flow_ui(
 
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE flows SET name=$2, description=$3, definition=$4, updated_at=NOW() WHERE id=$1::uuid",
-            flow_id, name, description or None, _json.dumps(definition),
+            """UPDATE flows SET name=$2, description=$3, definition=$4, updated_at=NOW()
+               WHERE id=$1::uuid
+               AND ($5::uuid IS NULL OR owner_id = $5::uuid)""",
+            flow_id, name, description or None, _json.dumps(definition), owner_id,
         )
     return RedirectResponse(f"/admin/flows/{flow_id}/edit?flash=Saved", status_code=303)
 
 
 @router.post("/flows/{flow_id}/delete", response_class=HTMLResponse)
 async def delete_flow_ui(request: Request, flow_id: str):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE flows SET is_active=false, updated_at=NOW() WHERE id=$1::uuid", flow_id
+            """UPDATE flows SET is_active=false, updated_at=NOW()
+               WHERE id=$1::uuid
+               AND ($2::uuid IS NULL OR owner_id = $2::uuid)""",
+            flow_id, owner_id,
         )
     return RedirectResponse("/admin/flows?flash=Flow+deactivated", status_code=303)
 
 
 @router.get("/flows/{flow_id}/executions", response_class=HTMLResponse)
 async def flow_executions(request: Request, flow_id: str):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        flow = await conn.fetchrow("SELECT id, name FROM flows WHERE id=$1::uuid", flow_id)
+        flow = await conn.fetchrow(
+            "SELECT id, name FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id = $2::uuid)",
+            flow_id, owner_id,
+        )
         execs = await conn.fetch(
             """SELECT id, call_uuid, current_node_id, status, state, started_at, ended_at
                FROM flow_executions WHERE flow_id=$1::uuid

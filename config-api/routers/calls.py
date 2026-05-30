@@ -7,10 +7,11 @@ import json
 from datetime import datetime
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel
 
+import auth
 import db
 import redis_client
 
@@ -33,9 +34,9 @@ class CallLogIn(BaseModel):
 
 @router.post("", status_code=201)
 async def receive_call_log(body: CallLogIn):
+    """Called by the agent container — no user context, no ownership filter."""
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        # Look up the DID for this agent slug from active routes
         did_row = await conn.fetchrow(
             "SELECT did FROM phone_routes WHERE agent_slug=$1 AND is_active=true "
             "ORDER BY did LIMIT 1",
@@ -61,9 +62,7 @@ async def receive_call_log(body: CallLogIn):
                  stt_provider     = EXCLUDED.stt_provider,
                  llm_provider     = EXCLUDED.llm_provider,
                  tts_provider     = EXCLUDED.tts_provider,
-                 end_reason       = EXCLUDED.end_reason
-                 -- direction and destination are NOT overwritten:
-                 -- they are set at originate time and must be preserved""",
+                 end_reason       = EXCLUDED.end_reason""",
             body.call_uuid, body.agent_slug, did,
             _parse_dt(body.started_at), _parse_dt(body.ended_at), body.duration_seconds,
             body.turn_count,
@@ -71,7 +70,7 @@ async def receive_call_log(body: CallLogIn):
             body.stt_provider, body.llm_provider, body.tts_provider,
             body.end_reason,
         )
-    # Fire CDR webhook if a callback_url was registered at originate time.
+
     meta = await redis_client.get_call_meta(body.call_uuid)
     callback_url = meta.get("callback_url")
     if callback_url:
@@ -86,7 +85,6 @@ async def receive_call_log(body: CallLogIn):
 
 
 async def _fire_callback(url: str, call_uuid: str, payload: dict) -> None:
-    """POST the completed CDR to the registered callback URL. Fire-and-forget."""
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(url, json=payload, timeout=10.0)
@@ -97,28 +95,41 @@ async def _fire_callback(url: str, call_uuid: str, payload: dict) -> None:
 
 
 @router.get("")
-async def list_calls(limit: int = 50, offset: int = 0):
+async def list_calls(request: Request, limit: int = 50, offset: int = 0):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT call_uuid, agent_slug, did, started_at, ended_at,
-                      duration_seconds, turn_count, stt_provider, llm_provider,
-                      tts_provider, end_reason
-               FROM call_logs
-               ORDER BY started_at DESC NULLS LAST
-               LIMIT $1 OFFSET $2""",
-            limit, offset,
+            """SELECT cl.call_uuid, cl.agent_slug, cl.did, cl.started_at, cl.ended_at,
+                      cl.duration_seconds, cl.turn_count, cl.stt_provider, cl.llm_provider,
+                      cl.tts_provider, cl.end_reason
+               FROM call_logs cl
+               LEFT JOIN agents a ON cl.agent_slug = a.slug
+               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid)
+               ORDER BY cl.started_at DESC NULLS LAST
+               LIMIT $2 OFFSET $3""",
+            owner_id, limit, offset,
         )
-        total = await conn.fetchval("SELECT COUNT(*) FROM call_logs")
+        total = await conn.fetchval(
+            """SELECT COUNT(*) FROM call_logs cl
+               LEFT JOIN agents a ON cl.agent_slug = a.slug
+               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid)""",
+            owner_id,
+        )
     return {"total": total, "calls": [dict(r) for r in rows]}
 
 
 @router.get("/{call_uuid}")
-async def get_call(call_uuid: str):
+async def get_call(request: Request, call_uuid: str):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM call_logs WHERE call_uuid=$1", call_uuid
+            """SELECT cl.* FROM call_logs cl
+               LEFT JOIN agents a ON cl.agent_slug = a.slug
+               WHERE cl.call_uuid=$1
+               AND ($2::uuid IS NULL OR a.owner_id = $2::uuid)""",
+            call_uuid, owner_id,
         )
     if not row:
         raise HTTPException(status_code=404, detail="Call not found")

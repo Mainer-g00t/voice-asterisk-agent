@@ -91,6 +91,19 @@ async def has_valid_session(request: Request) -> bool:
 
 # ── API key ───────────────────────────────────────────────────────────────────
 
+def get_owner_id(request: Request) -> str | None:
+    """
+    Return the UUID string to use in owner_id WHERE clauses, or None if the
+    caller is the admin backdoor / dev mode (which sees all rows).
+    """
+    user = getattr(request.state, "user", None)
+    if not user:
+        return None
+    uid = user.get("user_id", "")
+    # admin backdoor and dev mode are superusers — no filter
+    return None if uid in ("admin", "dev") else uid
+
+
 def has_valid_api_key(request: Request) -> bool:
     """Return True if the request carries a valid X-Api-Key header."""
     if not API_KEY:
@@ -134,6 +147,12 @@ async def api_auth_middleware(request: Request, call_next):
     path = request.url.path
     if not path.startswith("/api/"):
         return await call_next(request)
-    if await has_valid_session(request) or has_valid_api_key(request):
+    user = await get_session_user(request)
+    if user:
+        request.state.user = user
+        return await call_next(request)
+    if has_valid_api_key(request):
+        # API key callers get admin-level access (no owner filter)
+        request.state.user = {"user_id": "admin", "name": "API", "email": "", "avatar_url": ""}
         return await call_next(request)
     return JSONResponse({"detail": "Forbidden — provide X-Api-Key header"}, status_code=403)

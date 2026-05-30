@@ -3,9 +3,10 @@ Phone routes API — CRUD for DID → agent_slug mappings.
 POST /api/routes/apply triggers container management + Asterisk reload.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+import auth
 import db
 import docker_manager
 
@@ -28,21 +29,30 @@ class RouteUpdate(BaseModel):
 # ── Route CRUD ────────────────────────────────────────────────────────────────
 
 @router.get("")
-async def list_routes():
+async def list_routes(request: Request):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT * FROM phone_routes ORDER BY did"
+            """SELECT pr.* FROM phone_routes pr
+               JOIN agents a ON pr.agent_slug = a.slug
+               WHERE ($1::uuid IS NULL OR a.owner_id = $1::uuid)
+               ORDER BY pr.did""",
+            owner_id,
         )
     return [dict(r) for r in rows]
 
 
 @router.post("", status_code=201)
-async def create_route(body: RouteCreate):
-    # Verify agent exists
+async def create_route(request: Request, body: RouteCreate):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        agent = await conn.fetchrow("SELECT slug FROM agents WHERE slug=$1", body.agent_slug)
+        # Verify agent exists and belongs to this user
+        agent = await conn.fetchrow(
+            "SELECT slug FROM agents WHERE slug=$1 AND ($2::uuid IS NULL OR owner_id=$2::uuid)",
+            body.agent_slug, owner_id,
+        )
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent '{body.agent_slug}' not found")
         try:
@@ -59,19 +69,27 @@ async def create_route(body: RouteCreate):
 
 
 @router.put("/{route_id}")
-async def update_route(route_id: str, body: RouteUpdate):
+async def update_route(request: Request, route_id: str, body: RouteUpdate):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        updates, params = [], [route_id]
+        # Build SET clause
+        updates, params = [], [route_id, owner_id]
         for field in ("agent_slug", "description", "is_active"):
             val = getattr(body, field)
             if val is not None:
                 params.append(val)
-                updates.append(f"{field} = ${len(params)}")
+                updates.append(f"pr.{field} = ${len(params)}")
         if not updates:
             raise HTTPException(status_code=422, detail="No fields to update")
         row = await conn.fetchrow(
-            f"UPDATE phone_routes SET {', '.join(updates)} WHERE id=$1 RETURNING *",
+            f"""UPDATE phone_routes pr
+                SET {', '.join(updates)}
+                FROM agents a
+                WHERE pr.id=$1
+                AND pr.agent_slug = a.slug
+                AND ($2::uuid IS NULL OR a.owner_id = $2::uuid)
+                RETURNING pr.*""",
             *params,
         )
         if not row:
@@ -80,11 +98,17 @@ async def update_route(route_id: str, body: RouteUpdate):
 
 
 @router.delete("/{route_id}")
-async def delete_route(route_id: str):
+async def delete_route(request: Request, route_id: str):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         result = await conn.execute(
-            "DELETE FROM phone_routes WHERE id=$1", route_id
+            """DELETE FROM phone_routes pr
+               USING agents a
+               WHERE pr.id=$1
+               AND pr.agent_slug = a.slug
+               AND ($2::uuid IS NULL OR a.owner_id = $2::uuid)""",
+            route_id, owner_id,
         )
     if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="Route not found")
@@ -94,23 +118,26 @@ async def delete_route(route_id: str):
 # ── Apply ─────────────────────────────────────────────────────────────────────
 
 @router.post("/apply")
-async def apply_routes():
+async def apply_routes(request: Request):
     """
-    1. Fetch all active routes.
-    2. Ensure a container is running for each unique agent slug referenced.
-    3. Generate extensions.conf from the routes.
-    4. Reload Asterisk dialplan.
+    Apply routes owned by the current user to Asterisk.
+    Admin backdoor (owner_id=None) applies all active routes.
     """
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         routes = await conn.fetch(
-            "SELECT did, agent_slug, description FROM phone_routes WHERE is_active=true ORDER BY did"
+            """SELECT pr.did, pr.agent_slug, pr.description
+               FROM phone_routes pr
+               JOIN agents a ON pr.agent_slug = a.slug
+               WHERE pr.is_active=true
+               AND ($1::uuid IS NULL OR a.owner_id = $1::uuid)
+               ORDER BY pr.did""",
+            owner_id,
         )
     routes = [dict(r) for r in routes]
 
-    # Determine which slugs need containers
     active_slugs = {r["agent_slug"] for r in routes}
-
     container_results = {}
     errors = []
 
@@ -121,13 +148,11 @@ async def apply_routes():
         except Exception as e:
             errors.append(f"Container agent-{slug}: {e}")
 
-    # Write extensions.conf
     try:
         docker_manager.write_extensions_conf(routes)
     except Exception as e:
         errors.append(f"extensions.conf write failed: {e}")
 
-    # Reload Asterisk dialplan
     dialplan_output = None
     try:
         dialplan_output = docker_manager.reload_asterisk_dialplan()
@@ -145,5 +170,4 @@ async def apply_routes():
 
 @router.get("/status")
 async def containers_status():
-    """Return current status of all agent-* Docker containers."""
     return docker_manager.list_running_agents()

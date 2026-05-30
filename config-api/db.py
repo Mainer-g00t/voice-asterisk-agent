@@ -146,20 +146,26 @@ async def build_snapshot(slug: str) -> dict[str, Any] | None:
 
 # ── agent CRUD helpers ────────────────────────────────────────────────────────
 
-async def list_agents() -> list[dict]:
+async def list_agents(owner_id: str | None = None) -> list[dict]:
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT slug, display_name, is_active, updated_at FROM agents ORDER BY display_name"
+            "SELECT slug, display_name, is_active, updated_at FROM agents "
+            "WHERE ($1::uuid IS NULL OR owner_id = $1::uuid) "
+            "ORDER BY display_name",
+            owner_id,
         )
     return [dict(r) for r in rows]
 
 
-async def get_agent_full(slug: str) -> dict | None:
-    """Return agent row + related tables as dicts."""
+async def get_agent_full(slug: str, owner_id: str | None = None) -> dict | None:
+    """Return agent row + related tables as dicts. owner_id=None means no restriction."""
     pool = get_pool()
     async with pool.acquire() as conn:
-        agent = await conn.fetchrow("SELECT * FROM agents WHERE slug = $1", slug)
+        agent = await conn.fetchrow(
+            "SELECT * FROM agents WHERE slug = $1 AND ($2::uuid IS NULL OR owner_id = $2::uuid)",
+            slug, owner_id,
+        )
         if not agent:
             return None
         agent_id = agent["id"]

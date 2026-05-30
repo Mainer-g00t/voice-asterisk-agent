@@ -6,11 +6,12 @@ import json
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
 from pydantic import BaseModel
 
+import auth
 import db
 import redis_client
 
@@ -63,8 +64,11 @@ class SpecialistConfig(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-async def _get_agent_id(conn, slug: str) -> str:
-    row = await conn.fetchrow("SELECT id FROM agents WHERE slug = $1", slug)
+async def _get_agent_id(conn, slug: str, owner_id=None) -> str:
+    row = await conn.fetchrow(
+        "SELECT id FROM agents WHERE slug = $1 AND ($2::uuid IS NULL OR owner_id = $2::uuid)",
+        slug, owner_id,
+    )
     if not row:
         raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
     return str(row["id"])
@@ -89,21 +93,23 @@ async def _save_version(conn, agent_id: str, snapshot: dict) -> None:
 # ── Agent endpoints ───────────────────────────────────────────────────────────
 
 @router.get("")
-async def list_agents():
-    return await db.list_agents()
+async def list_agents(request: Request):
+    owner_id = auth.get_owner_id(request)
+    return await db.list_agents(owner_id=owner_id)
 
 
 @router.post("", status_code=201)
-async def create_agent(body: AgentCreate):
+async def create_agent(request: Request, body: AgentCreate):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             try:
                 row = await conn.fetchrow(
-                    "INSERT INTO agents (slug, display_name, system_prompt, greeting_trigger, is_active) "
-                    "VALUES ($1, $2, $3, $4, $5) RETURNING *",
+                    "INSERT INTO agents (slug, display_name, system_prompt, greeting_trigger, is_active, owner_id) "
+                    "VALUES ($1, $2, $3, $4, $5, $6::uuid) RETURNING *",
                     body.slug, body.display_name, body.system_prompt,
-                    body.greeting_trigger, body.is_active,
+                    body.greeting_trigger, body.is_active, owner_id,
                 )
             except Exception as e:
                 if "unique" in str(e).lower():
@@ -115,19 +121,21 @@ async def create_agent(body: AgentCreate):
 
 
 @router.get("/{slug}")
-async def get_agent(slug: str):
-    data = await db.get_agent_full(slug)
+async def get_agent(request: Request, slug: str):
+    owner_id = auth.get_owner_id(request)
+    data = await db.get_agent_full(slug, owner_id=owner_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
     return data
 
 
 @router.put("/{slug}")
-async def update_agent(slug: str, body: AgentUpdate):
+async def update_agent(request: Request, slug: str, body: AgentUpdate):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            agent_id = await _get_agent_id(conn, slug)
+            agent_id = await _get_agent_id(conn, slug, owner_id)
             updates, params = [], [agent_id]
             for field in ("display_name", "system_prompt", "greeting_trigger", "is_active"):
                 val = getattr(body, field)
@@ -148,13 +156,17 @@ async def update_agent(slug: str, body: AgentUpdate):
 
 
 @router.delete("/{slug}")
-async def delete_agent(slug: str):
+async def delete_agent(request: Request, slug: str):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute(
-                "UPDATE agents SET is_active = false WHERE slug = $1", slug
+            result = await conn.execute(
+                "UPDATE agents SET is_active = false WHERE slug = $1 AND ($2::uuid IS NULL OR owner_id = $2::uuid)",
+                slug, owner_id,
             )
+            if result == "UPDATE 0":
+                raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
     await redis_client.delete_agent_snapshot(slug)
     return {"status": "deactivated"}
 
@@ -162,13 +174,14 @@ async def delete_agent(slug: str):
 # ── Provider config endpoints ─────────────────────────────────────────────────
 
 @router.put("/{slug}/providers/{provider_type}")
-async def upsert_provider(slug: str, provider_type: str, body: ProviderConfig):
+async def upsert_provider(request: Request, slug: str, provider_type: str, body: ProviderConfig):
+    owner_id = auth.get_owner_id(request)
     if provider_type not in ("stt", "llm", "tts"):
         raise HTTPException(status_code=422, detail="provider_type must be stt, llm, or tts")
     pool = db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            agent_id = await _get_agent_id(conn, slug)
+            agent_id = await _get_agent_id(conn, slug, owner_id)
             await conn.execute(
                 """INSERT INTO provider_configs (agent_id, provider_type, provider_name, model, extra_config)
                    VALUES ($1, $2, $3, $4, $5)
@@ -186,19 +199,21 @@ async def upsert_provider(slug: str, provider_type: str, body: ProviderConfig):
 # ── Tool definition endpoints ─────────────────────────────────────────────────
 
 @router.get("/{slug}/tools")
-async def list_tools(slug: str):
-    data = await db.get_agent_full(slug)
+async def list_tools(request: Request, slug: str):
+    owner_id = auth.get_owner_id(request)
+    data = await db.get_agent_full(slug, owner_id=owner_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
     return data["tools"]
 
 
 @router.put("/{slug}/tools/{tool_name}")
-async def upsert_tool(slug: str, tool_name: str, body: ToolDefinition):
+async def upsert_tool(request: Request, slug: str, tool_name: str, body: ToolDefinition):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            agent_id = await _get_agent_id(conn, slug)
+            agent_id = await _get_agent_id(conn, slug, owner_id)
             await conn.execute(
                 """INSERT INTO tool_definitions
                        (agent_id, tool_name, handler_type, description, parameters,
@@ -220,12 +235,13 @@ async def upsert_tool(slug: str, tool_name: str, body: ToolDefinition):
 
 
 @router.post("/{slug}/tools/assign/{tool_id}", status_code=201)
-async def assign_global_tool(slug: str, tool_id: str, sort_order: int = 0):
+async def assign_global_tool(request: Request, slug: str, tool_id: str, sort_order: int = 0):
     """Assign a global tool to an agent."""
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            agent_id = await _get_agent_id(conn, slug)
+            agent_id = await _get_agent_id(conn, slug, owner_id)
             # Verify tool exists and is global
             tool = await conn.fetchrow(
                 "SELECT id FROM tool_definitions WHERE id = $1 AND is_global = TRUE", tool_id
@@ -243,12 +259,13 @@ async def assign_global_tool(slug: str, tool_id: str, sort_order: int = 0):
 
 
 @router.delete("/{slug}/tools/unassign/{tool_id}")
-async def unassign_global_tool(slug: str, tool_id: str):
+async def unassign_global_tool(request: Request, slug: str, tool_id: str):
     """Remove a global tool assignment from an agent."""
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            agent_id = await _get_agent_id(conn, slug)
+            agent_id = await _get_agent_id(conn, slug, owner_id)
             await conn.execute(
                 "DELETE FROM agent_tool_refs WHERE agent_id = $1 AND tool_id = $2",
                 agent_id, tool_id,
@@ -258,11 +275,12 @@ async def unassign_global_tool(slug: str, tool_id: str):
 
 
 @router.delete("/{slug}/tools/{tool_name}")
-async def delete_tool(slug: str, tool_name: str):
+async def delete_tool(request: Request, slug: str, tool_name: str):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            agent_id = await _get_agent_id(conn, slug)
+            agent_id = await _get_agent_id(conn, slug, owner_id)
             await conn.execute(
                 "DELETE FROM tool_definitions WHERE agent_id = $1 AND tool_name = $2",
                 agent_id, tool_name,
@@ -274,19 +292,21 @@ async def delete_tool(slug: str, tool_name: str):
 # ── Specialist config endpoints ───────────────────────────────────────────────
 
 @router.get("/{slug}/specialists")
-async def list_specialists(slug: str):
-    data = await db.get_agent_full(slug)
+async def list_specialists(request: Request, slug: str):
+    owner_id = auth.get_owner_id(request)
+    data = await db.get_agent_full(slug, owner_id=owner_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
     return data["specialists"]
 
 
 @router.put("/{slug}/specialists/{specialist_key}")
-async def upsert_specialist(slug: str, specialist_key: str, body: SpecialistConfig):
+async def upsert_specialist(request: Request, slug: str, specialist_key: str, body: SpecialistConfig):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            agent_id = await _get_agent_id(conn, slug)
+            agent_id = await _get_agent_id(conn, slug, owner_id)
             await conn.execute(
                 """INSERT INTO specialist_configs
                        (agent_id, specialist_key, display_name, system_prompt, subagent_model, sort_order)
@@ -304,11 +324,12 @@ async def upsert_specialist(slug: str, specialist_key: str, body: SpecialistConf
 
 
 @router.delete("/{slug}/specialists/{specialist_key}")
-async def delete_specialist(slug: str, specialist_key: str):
+async def delete_specialist(request: Request, slug: str, specialist_key: str):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            agent_id = await _get_agent_id(conn, slug)
+            agent_id = await _get_agent_id(conn, slug, owner_id)
             await conn.execute(
                 "DELETE FROM specialist_configs WHERE agent_id = $1 AND specialist_key = $2",
                 agent_id, specialist_key,
@@ -320,16 +341,18 @@ async def delete_specialist(slug: str, specialist_key: str):
 # ── Version history ───────────────────────────────────────────────────────────
 
 @router.get("/{slug}/versions")
-async def list_versions(slug: str):
-    data = await db.get_agent_full(slug)
+async def list_versions(request: Request, slug: str):
+    owner_id = auth.get_owner_id(request)
+    data = await db.get_agent_full(slug, owner_id=owner_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
     return data["versions"]
 
 
 @router.post("/{slug}/versions/{version_id}/restore")
-async def restore_version(slug: str, version_id: str):
-    data = await db.get_agent_full(slug)
+async def restore_version(request: Request, slug: str, version_id: str):
+    owner_id = auth.get_owner_id(request)
+    data = await db.get_agent_full(slug, owner_id=owner_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"Agent '{slug}' not found")
 

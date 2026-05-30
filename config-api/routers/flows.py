@@ -1,19 +1,16 @@
 """
 Flow management API — CRUD for call flow definitions.
-
-Flows define multi-step, branching call logic (nodes + edges) that can be
-assigned to phone routes or agents. The flow engine runs inside the agent
-container; config-api stores definitions and execution history.
 """
 
 import json
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel
 
+import auth
 import db
 import redis_client
 from voiceai_common.flow_engine import validate_flow, get_entry_node
@@ -26,33 +23,37 @@ router = APIRouter()
 class FlowIn(BaseModel):
     name: str
     description: str | None = None
-    definition: dict[str, Any] = {}  # nodes + edges JSON
+    definition: dict[str, Any] = {}
 
 
 class FlowExecutionIn(BaseModel):
-    """Posted by the agent when a flow execution ends."""
     call_uuid: str
     status: str
     current_node_id: str | None = None
     state: dict[str, Any] = {}
-    events: list[dict[str, Any]] = []  # [{event_type, node_id, edge_id, data, ts}, ...]
+    events: list[dict[str, Any]] = []
 
 
 # ── CRUD endpoints ────────────────────────────────────────────────────────────
 
 @router.get("")
-async def list_flows():
+async def list_flows(request: Request):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT id, name, description, is_active, created_at, updated_at "
-            "FROM flows ORDER BY name"
+            "FROM flows "
+            "WHERE ($1::uuid IS NULL OR owner_id = $1::uuid) "
+            "ORDER BY name",
+            owner_id,
         )
     return [dict(r) for r in rows]
 
 
 @router.post("", status_code=201)
-async def create_flow(body: FlowIn):
+async def create_flow(request: Request, body: FlowIn):
+    owner_id = auth.get_owner_id(request)
     errors = validate_flow(body.definition)
     if errors:
         raise HTTPException(status_code=422, detail={"validation_errors": errors})
@@ -60,22 +61,24 @@ async def create_flow(body: FlowIn):
     pool = db.get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            """INSERT INTO flows (name, description, definition)
-               VALUES ($1, $2, $3)
+            """INSERT INTO flows (name, description, definition, owner_id)
+               VALUES ($1, $2, $3, $4::uuid)
                RETURNING id, name, description, is_active, created_at""",
-            body.name,
-            body.description,
-            json.dumps(body.definition),
+            body.name, body.description, json.dumps(body.definition), owner_id,
         )
     logger.info(f"Flow created: '{body.name}' ({row['id']})")
     return dict(row)
 
 
 @router.get("/{flow_id}")
-async def get_flow(flow_id: str):
+async def get_flow(request: Request, flow_id: str):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM flows WHERE id=$1::uuid", flow_id)
+        row = await conn.fetchrow(
+            "SELECT * FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id=$2::uuid)",
+            flow_id, owner_id,
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Flow not found")
     d = dict(row)
@@ -85,7 +88,8 @@ async def get_flow(flow_id: str):
 
 
 @router.put("/{flow_id}")
-async def update_flow(flow_id: str, body: FlowIn):
+async def update_flow(request: Request, flow_id: str, body: FlowIn):
+    owner_id = auth.get_owner_id(request)
     errors = validate_flow(body.definition)
     if errors:
         raise HTTPException(status_code=422, detail={"validation_errors": errors})
@@ -94,9 +98,9 @@ async def update_flow(flow_id: str, body: FlowIn):
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """UPDATE flows SET name=$2, description=$3, definition=$4, updated_at=NOW()
-               WHERE id=$1::uuid
+               WHERE id=$1::uuid AND ($5::uuid IS NULL OR owner_id=$5::uuid)
                RETURNING id, name, description, is_active, updated_at""",
-            flow_id, body.name, body.description, json.dumps(body.definition),
+            flow_id, body.name, body.description, json.dumps(body.definition), owner_id,
         )
     if not row:
         raise HTTPException(status_code=404, detail="Flow not found")
@@ -105,12 +109,14 @@ async def update_flow(flow_id: str, body: FlowIn):
 
 
 @router.delete("/{flow_id}", status_code=204)
-async def deactivate_flow(flow_id: str):
+async def deactivate_flow(request: Request, flow_id: str):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
         result = await conn.execute(
-            "UPDATE flows SET is_active=false, updated_at=NOW() WHERE id=$1::uuid",
-            flow_id,
+            "UPDATE flows SET is_active=false, updated_at=NOW() "
+            "WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id=$2::uuid)",
+            flow_id, owner_id,
         )
     if result == "UPDATE 0":
         raise HTTPException(status_code=404, detail="Flow not found")
@@ -119,9 +125,17 @@ async def deactivate_flow(flow_id: str):
 # ── Execution history ─────────────────────────────────────────────────────────
 
 @router.get("/{flow_id}/executions")
-async def list_executions(flow_id: str, limit: int = 50):
+async def list_executions(request: Request, flow_id: str, limit: int = 50):
+    owner_id = auth.get_owner_id(request)
     pool = db.get_pool()
     async with pool.acquire() as conn:
+        # Verify flow ownership first
+        flow = await conn.fetchrow(
+            "SELECT id FROM flows WHERE id=$1::uuid AND ($2::uuid IS NULL OR owner_id=$2::uuid)",
+            flow_id, owner_id,
+        )
+        if not flow:
+            raise HTTPException(status_code=404, detail="Flow not found")
         rows = await conn.fetch(
             """SELECT id, call_uuid, current_node_id, status, state, started_at, ended_at
                FROM flow_executions WHERE flow_id=$1::uuid
@@ -152,10 +166,7 @@ async def get_execution_events(execution_id: str):
 
 @router.post("/executions/complete", status_code=200)
 async def complete_execution(body: FlowExecutionIn):
-    """
-    Called by the agent container after the call ends.
-    Updates the execution row and bulk-inserts the event log.
-    """
+    """Called by the agent container — no user context, no ownership filter."""
     pool = db.get_pool()
     async with pool.acquire() as conn:
         exec_row = await conn.fetchrow(
