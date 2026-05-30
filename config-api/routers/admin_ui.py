@@ -220,6 +220,9 @@ async def edit_agent_form(request: Request, slug: str, flash: str = ""):
 
     providers_by_type = {p["provider_type"]: p for p in data["providers"]}
     global_tools = await db.list_global_tools()
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        flows = await conn.fetch("SELECT id, name FROM flows WHERE is_active=true ORDER BY name")
 
     return templates.TemplateResponse(
         request,
@@ -231,6 +234,7 @@ async def edit_agent_form(request: Request, slug: str, flash: str = ""):
             "specialists": data["specialists"],
             "versions": data["versions"],
             "global_tools": global_tools,
+            "flows": [dict(f) for f in flows],
             "stt_options": STT_OPTIONS,
             "llm_options": LLM_OPTIONS,
             "tts_options": TTS_OPTIONS,
@@ -247,6 +251,7 @@ async def save_agent(
     system_prompt: str = Form(...),
     greeting_trigger: str = Form(...),
     is_active: str = Form("on"),
+    flow_id: str = Form(""),
     stt_provider: str = Form("local"),
     stt_model: str = Form(""),
     llm_provider: str = Form("local"),
@@ -258,11 +263,14 @@ async def save_agent(
     async with pool.acquire() as conn:
         async with conn.transaction():
             active = is_active == "on"
+            clean_flow_id = flow_id.strip() or None
             await conn.execute(
                 """UPDATE agents
-                   SET display_name=$2, system_prompt=$3, greeting_trigger=$4, is_active=$5
+                   SET display_name=$2, system_prompt=$3, greeting_trigger=$4,
+                       is_active=$5, flow_id=$6::uuid
                    WHERE slug=$1""",
                 slug, display_name, system_prompt, greeting_trigger, active,
+                clean_flow_id,
             )
             def _clean_model(v: str) -> str | None:
                 """Return None for empty or literal 'None' strings."""
@@ -284,6 +292,10 @@ async def save_agent(
     await _push_snapshot(slug)
     data = await db.get_agent_full(slug)
     providers_by_type = {p["provider_type"]: p for p in data["providers"]}
+    global_tools = await db.list_global_tools()
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        flows = await conn.fetch("SELECT id, name FROM flows WHERE is_active=true ORDER BY name")
 
     return templates.TemplateResponse(
         request,
@@ -294,6 +306,8 @@ async def save_agent(
             "tools": data["tools"],
             "specialists": data["specialists"],
             "versions": data["versions"],
+            "global_tools": global_tools,
+            "flows": [dict(f) for f in flows],
             "stt_options": STT_OPTIONS,
             "llm_options": LLM_OPTIONS,
             "tts_options": TTS_OPTIONS,

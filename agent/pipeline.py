@@ -74,6 +74,27 @@ async def _load_flow_execution(call_uuid: str) -> dict | None:
     return None
 
 
+async def _init_flow_execution(call_uuid: str, flow_id: str) -> dict | None:
+    """
+    Called for inbound calls when the agent config has a flow_id but no
+    execution has been pre-created (outbound calls pre-create in advance).
+    Asks config-api to create the DB row and warm Redis, then returns the snapshot.
+    """
+    config_api_url = os.environ.get("CONFIG_API_URL", "http://config-api:8080")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{config_api_url}/internal/flows/init-execution",
+                json={"call_uuid": call_uuid, "flow_id": flow_id},
+                timeout=5.0,
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as exc:
+        logger.warning(f"Could not init flow execution for {call_uuid}: {exc}")
+        return None
+
+
 async def _load_call_vars(call_uuid: str) -> dict:
     """Fetch per-call template variables stored by the originate API, if any."""
     try:
@@ -319,7 +340,12 @@ async def create_pipeline_task(
         config = _apply_template_vars(config, call_vars)
 
     # ── Flow execution (optional) ─────────────────────────────────────────────
+    # 1. Check if a flow execution was pre-created (outbound calls do this).
+    # 2. If not, but the agent config has a flow_id assigned, init one now (inbound calls).
     flow_exec = await _load_flow_execution(call_uuid)
+    if flow_exec is None and config.get("flow_id"):
+        logger.info(f"Agent '{slug}' has flow '{config['flow_id']}' — init execution for {call_uuid}")
+        flow_exec = await _init_flow_execution(call_uuid, config["flow_id"])
     flow_controller: FlowController | None = None
 
     if flow_exec and flow_exec.get("flow_def"):

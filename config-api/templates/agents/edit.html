@@ -214,8 +214,38 @@
 
   </div>
 
-  <!-- Right column: providers + versions -->
+  <!-- Right column: flow + providers + versions -->
   <div class="col-lg-4">
+
+    <!-- Flow assignment -->
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold">🔀 Flow <span class="text-muted fw-normal small">(optional)</span></div>
+      <div class="card-body">
+        <select name="flow_id" class="form-select form-select-sm">
+          <option value="">— No flow (standard agent) —</option>
+          {% for f in (flows or []) %}
+          <option value="{{ f.id }}"
+            {% if agent and agent.flow_id and agent.flow_id|string == f.id|string %}selected{% endif %}>
+            {{ f.name }}
+          </option>
+          {% endfor %}
+        </select>
+        <div class="form-text">
+          When a flow is assigned, every call to this agent runs the flow.
+          <a href="/admin/flows" target="_blank">Manage flows →</a>
+        </div>
+        {% if agent and agent.flow_id %}
+        <div class="mt-2">
+          <a href="/admin/flows/{{ agent.flow_id }}/executions" class="btn btn-sm btn-outline-secondary">
+            📊 Execution history
+          </a>
+          <a href="/admin/flows/{{ agent.flow_id }}/edit" class="btn btn-sm btn-outline-secondary">
+            ✏️ Edit flow
+          </a>
+        </div>
+        {% endif %}
+      </div>
+    </div>
 
     <div class="card shadow-sm mb-4">
       <div class="card-header fw-semibold">Providers</div>
