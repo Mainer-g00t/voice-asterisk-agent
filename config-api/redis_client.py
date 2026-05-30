@@ -11,6 +11,7 @@ _redis: aioredis.Redis | None = None
 
 AGENT_CONFIG_TTL = 300    # seconds
 DEFAULTS_TTL = 600
+CALL_VARS_TTL = 600       # 10 min — plenty of time for the call to connect
 
 
 async def init_redis(url: str) -> None:
@@ -50,6 +51,20 @@ async def delete_agent_snapshot(slug: str) -> None:
         await get_redis().delete(f"agent:config:{slug}")
     except Exception as exc:
         logger.warning(f"Redis delete failed for '{slug}': {exc}")
+
+
+async def push_call_vars(call_uuid: str, vars: dict) -> None:
+    """
+    Store per-call template variables so the agent can substitute them into
+    the system prompt and greeting at call start.
+    Key: call:vars:{call_uuid}  TTL: CALL_VARS_TTL seconds
+    """
+    try:
+        await get_redis().setex(
+            f"call:vars:{call_uuid}", CALL_VARS_TTL, json.dumps(vars)
+        )
+    except Exception as exc:
+        logger.warning(f"Redis: failed to store call vars for {call_uuid}: {exc}")
 
 
 async def get_agent_snapshot(slug: str) -> dict | None:

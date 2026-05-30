@@ -59,6 +59,38 @@ def _get_redis() -> aioredis.Redis:
 
 # ── Config loading ────────────────────────────────────────────────────────────
 
+async def _load_call_vars(call_uuid: str) -> dict:
+    """Fetch per-call template variables stored by the originate API, if any."""
+    try:
+        raw = await _get_redis().get(f"call:vars:{call_uuid}")
+        if raw:
+            return json.loads(raw)
+    except Exception as e:
+        logger.warning(f"Could not load call vars for {call_uuid}: {e}")
+    return {}
+
+
+def _apply_template_vars(config: dict, vars: dict) -> dict:
+    """
+    Substitute {placeholder} patterns in system_prompt and greeting_trigger.
+    Unknown placeholders are left as-is (format_map with a default-missing dict).
+    """
+    if not vars:
+        return config
+
+    class _Safe(dict):
+        def __missing__(self, key):
+            return "{" + key + "}"  # leave unknown placeholders intact
+
+    safe = _Safe(vars)
+    config = dict(config)
+    if config.get("system_prompt"):
+        config["system_prompt"] = config["system_prompt"].format_map(safe)
+    if config.get("greeting_trigger"):
+        config["greeting_trigger"] = config["greeting_trigger"].format_map(safe)
+    return config
+
+
 async def _load_agent_config(slug: str) -> dict:
     """
     1. Try Redis (fast path, ~1 ms).
@@ -262,6 +294,10 @@ async def create_pipeline_task(
 ) -> tuple[PipelineTask, CallLogger]:
     slug = os.environ.get("AGENT_SLUG", "basic")
     config = await _load_agent_config(slug)
+    call_vars = await _load_call_vars(call_uuid)
+    if call_vars:
+        logger.info(f"Applying template vars for call {call_uuid}: {list(call_vars.keys())}")
+        config = _apply_template_vars(config, call_vars)
 
     system_prompt = config["system_prompt"]
     greeting_trigger = config.get("greeting_trigger", "Hello")

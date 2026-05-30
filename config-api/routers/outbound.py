@@ -24,6 +24,7 @@ from pydantic import BaseModel
 import ami_client
 import db
 import docker_manager
+import redis_client
 
 router = APIRouter()
 
@@ -36,11 +37,12 @@ CHANNEL_FORMAT = os.environ.get("OUTBOUND_CHANNEL_FORMAT", "PJSIP/{destination}"
 
 
 class OriginateRequest(BaseModel):
-    destination: str               # number or endpoint name, e.g. "+15551234567" or "softphone"
-    agent_slug: str = "basic"      # which agent to use for the conversation
+    destination: str                        # number or endpoint name, e.g. "+15551234567" or "softphone"
+    agent_slug: str = "basic"              # which agent to use for the conversation
     caller_id: str = "Voice Agent <+10000000000>"
-    timeout_seconds: int = 30      # ring timeout before giving up
-    metadata: dict[str, Any] = {} # passed through to call_log for campaign tracking
+    timeout_seconds: int = 30              # ring timeout before giving up
+    template_vars: dict[str, str] = {}    # substituted into {placeholders} in prompt and greeting
+    metadata: dict[str, Any] = {}         # passed through to call_log for campaign tracking
 
 
 @router.post("/originate", status_code=202)
@@ -69,6 +71,10 @@ async def originate_call(body: OriginateRequest):
                ON CONFLICT (call_uuid) DO NOTHING""",
             call_uuid, body.agent_slug, body.destination,
         )
+
+    # Store template vars in Redis so the agent can substitute them into the prompt/greeting.
+    if body.template_vars:
+        await redis_client.push_call_vars(call_uuid, body.template_vars)
 
     # Ensure the agent container is running before Asterisk tries to connect.
     try:
