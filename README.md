@@ -39,6 +39,7 @@ cp .env.example .env
 # Set POSTGRES_PASSWORD to a strong password
 
 # 3. Build and start all services
+# (includes compiling the React flow editor bundle inside Docker — no Node.js needed)
 make up
 
 # 4. Open the admin UI
@@ -117,6 +118,8 @@ Agent-specific tools override global tools with the same name. All changes push 
 
 Flows define branching call graphs: nodes connected by conditional edges. The engine runs locally inside the agent container — no extra latency per event.
 
+The flow editor is a visual drag-and-drop canvas (React Flow). Nodes are colored cards; connections are drawn by pulling from the handle at the bottom of any node. Click a node or edge to open a side panel with typed form fields. The JSON stays as the underlying format and is auto-synced — a "View JSON" toggle reveals it.
+
 **Node types:**
 
 | Type | What it does |
@@ -149,7 +152,7 @@ Flows define branching call graphs: nodes connected by conditional edges. The en
 
 **Execution history:** Admin UI → 🔀 Flows → click the run-count badge, or use the shortcut button on the agent edit page. Each execution shows status, final node, turn count, and duration.
 
-The flow definition is a JSON blob stored in Postgres:
+The flow definition is stored as JSON in Postgres. The canvas also saves node positions under `_positions` (ignored by the engine):
 ```json
 {
   "entry_node_id": "n1",

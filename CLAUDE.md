@@ -24,7 +24,7 @@ Services: `postgres`, `redis`, `config-api`, `stt`, `llm`, `tts`, `agent` (fallb
 ## Common commands
 
 ```bash
-make up            # build images and start all services in background
+make up            # build images and start all services in background (includes frontend build)
 make down          # stop and remove containers
 make restart       # rebuild and restart only the default agent
 make migrate       # apply all SQL migrations to the running Postgres (safe to re-run)
@@ -82,9 +82,23 @@ Flows define multi-step branching call logic as a node graph. The engine is a st
 {
   "entry_node_id": "n1",
   "nodes": [{"id":"n1","type":"conversation","label":"...","config":{...}}],
-  "edges": [{"id":"e1","source":"n1","target":"n2","condition":{"type":"keyword_matched","words":["bye"]}}]
+  "edges": [{"id":"e1","source":"n1","target":"n2","condition":{"type":"keyword_matched","words":["bye"]}}],
+  "_positions": {"n1": {"x": 300, "y": 100}}
 }
 ```
+`_positions` stores canvas coordinates for the visual editor; ignored by the engine.
+
+**Visual flow editor** (`config-api/flow-editor/`): React + React Flow app that replaces the JSON textarea on the flow edit page. Built inside Docker via a multi-stage Dockerfile (node:20-slim → python:3.12-slim). The compiled bundle (`index.js` + `index.css`) is produced at image build time and served from `/static/flow-editor/` via FastAPI's `StaticFiles`. No Node.js needed on the host — `make up` handles everything.
+
+Source lives in `config-api/flow-editor/src/`:
+- `App.jsx` — ReactFlow canvas, toolbar (add node buttons), side-panel wiring
+- `nodeTypes.jsx` — 8 custom node components (colored cards with config preview)
+- `NodePanel.jsx` — right-side panel for editing selected node config
+- `EdgePanel.jsx` — right-side panel for editing selected edge condition
+- `convert.js` — `toReactFlow()` / `fromReactFlow()` (bidirectional, preserves positions)
+- `constants.js` — node type metadata, condition type definitions, `conditionLabel()`
+
+To iterate on the editor UI locally (requires Node): `cd config-api/flow-editor && npm ci && npm run build`, then rebuild the config-api container. The `make build-frontend` target does the same.
 
 **Assigning flows:**
 - Admin UI → Agents → edit → 🔀 Flow dropdown → pick flow → Save (applies to all calls to this agent)
