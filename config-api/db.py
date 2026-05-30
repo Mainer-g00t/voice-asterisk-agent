@@ -192,6 +192,11 @@ async def get_agent_full(slug: str) -> dict | None:
         for k, v in d.items():
             if isinstance(v, asyncpg.Record):
                 d[k] = dict(v)
+            elif isinstance(v, str) and k in ("parameters", "handler_config", "extra_config"):
+                try:
+                    d[k] = json.loads(v)
+                except Exception:
+                    pass
         return d
 
     return {
