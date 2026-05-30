@@ -7,10 +7,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libsoxr-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+# Install shared voiceai_common package first (single source of truth for flow_engine etc.)
+COPY packages/ /packages/
+RUN pip install --no-cache-dir /packages/
+
+COPY agent/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY agent/ .
 
 EXPOSE 9099
 

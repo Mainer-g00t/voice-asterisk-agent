@@ -1,0 +1,8 @@
+config-api/flow-editor/node_modules
+config-api/flow-editor/dist
+config-api/flow-editor/.vite
+config-api/static/
+**/__pycache__
+**/*.pyc
+.env
+.git

@@ -31,7 +31,7 @@ from frames import DTMFInputFrame, FlowTransitionFrame
 
 # Import the stateless engine (copied into the agent container via Dockerfile COPY
 # or mounted — we duplicate flow_engine.py for agent-side use).
-from flow_engine import apply_event, get_node, get_edges_from
+from voiceai_common.flow_engine import apply_event, get_node, get_edges_from
 
 
 CONFIG_API_URL = os.environ.get("CONFIG_API_URL", "http://config-api:8080")

@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 
 import db
 import docker_manager
-from flow_engine import validate_flow
+from voiceai_common.flow_engine import validate_flow
 from routers.agents import _push_snapshot, _get_agent_id
 
 router = APIRouter()

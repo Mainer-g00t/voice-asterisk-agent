@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 import db
 import redis_client
-from flow_engine import get_entry_node
+from voiceai_common.flow_engine import get_entry_node
 
 router = APIRouter()
 

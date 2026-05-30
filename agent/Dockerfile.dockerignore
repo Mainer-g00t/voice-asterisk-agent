@@ -1,0 +1,11 @@
+**/__pycache__
+**/*.pyc
+.env
+.git
+config-api/
+asterisk/
+monitoring/
+stt/
+llm/
+tts/
+tools-server/

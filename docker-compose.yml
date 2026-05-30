@@ -41,7 +41,9 @@ services:
   # ── Config API + Admin UI ─────────────────────────────────────────────────────
 
   config-api:
-    build: ./config-api
+    build:
+      context: .
+      dockerfile: config-api/Dockerfile
     container_name: config-api
     env_file: .env
     environment:
@@ -110,8 +112,8 @@ services:
 
   agent:
     build:
-      context: ./agent
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: agent/Dockerfile
     image: voice-asterisk-agent-agent  # named so route-managed containers can use it
     container_name: agent
     env_file: .env

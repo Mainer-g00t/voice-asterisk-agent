@@ -25,7 +25,7 @@ import ami_client
 import db
 import docker_manager
 import redis_client
-from flow_engine import get_entry_node
+from voiceai_common.flow_engine import get_entry_node
 
 router = APIRouter()
 

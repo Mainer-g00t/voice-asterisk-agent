@@ -298,6 +298,8 @@ Set in `.env` to your Mac's LAN IP (`ipconfig getifaddr en0`) when the softphone
 
 The default `OUTBOUND_CHANNEL_FORMAT=PJSIP/{destination}` works for dialing registered PJSIP endpoints (e.g. `destination=softphone` rings the softphone). To dial real E.164 numbers, configure a SIP provider trunk in `pjsip.conf` and set `OUTBOUND_CHANNEL_FORMAT=PJSIP/{destination}@your-trunk`.
 
-## Key gotcha: flow_engine.py is duplicated
+## Shared package: `packages/voiceai_common`
 
-`config-api/flow_engine.py` and `agent/flow_engine.py` are identical copies. The config-api uses it for validation on save; the agent uses it for local edge evaluation at runtime. When changing the engine logic, update **both files**.
+`packages/voiceai_common/flow_engine.py` is the **single source of truth** for flow edge evaluation. Both `config-api` and `agent` install it as a pip package at Docker build time — no duplication. To change flow engine logic, edit only `packages/voiceai_common/flow_engine.py` and rebuild both images.
+
+Both Dockerfiles use repo root as build context (`context: .`) so they can `COPY packages/ /packages/` before their own source. Import as `from voiceai_common.flow_engine import ...`.

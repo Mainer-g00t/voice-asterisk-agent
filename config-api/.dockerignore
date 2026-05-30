@@ -1,7 +1,0 @@
-flow-editor/node_modules
-flow-editor/dist
-flow-editor/.vite
-static/
-__pycache__
-*.pyc
-.env

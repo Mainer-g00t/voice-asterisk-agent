@@ -1,9 +1,9 @@
 # ── Stage 1: build the React flow editor ─────────────────────────────────────
 FROM node:20-slim AS frontend
 WORKDIR /build
-COPY flow-editor/package*.json ./
+COPY config-api/flow-editor/package*.json ./
 RUN npm ci --prefer-offline
-COPY flow-editor/ ./
+COPY config-api/flow-editor/ ./
 RUN npm run build
 # Output lands in /build/dist/
 
@@ -12,11 +12,15 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Install shared voiceai_common package first (single source of truth for flow_engine etc.)
+COPY packages/ /packages/
+RUN pip install --no-cache-dir /packages/
+
+COPY config-api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
-# Copy the built frontend bundle (produced by stage 1 into ../static/flow-editor)
+COPY config-api/ .
+# Copy the built frontend bundle (produced by stage 1)
 COPY --from=frontend /build/dist ./static/flow-editor
 
 EXPOSE 8080

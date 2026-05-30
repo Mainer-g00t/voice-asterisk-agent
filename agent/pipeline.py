@@ -351,7 +351,7 @@ async def create_pipeline_task(
     if flow_exec and flow_exec.get("flow_def"):
         flow_def = flow_exec["flow_def"]
         entry_node_id = flow_exec.get("current_node_id") or ""
-        from flow_engine import get_node as _get_node
+        from voiceai_common.flow_engine import get_node as _get_node
         entry_node = _get_node(flow_def, entry_node_id) or {}
         node_cfg = entry_node.get("config", {})
 
