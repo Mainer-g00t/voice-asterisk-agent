@@ -6,15 +6,16 @@ Note: Starlette 1.x changed TemplateResponse signature to (request, name, contex
 — request is the first positional arg, not part of the context dict.
 """
 
+import json as _json
+
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 import db
 import docker_manager
+from flow_engine import validate_flow
 from routers.agents import _push_snapshot, _get_agent_id
-
-import json as _json
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
@@ -298,4 +299,180 @@ async def save_agent(
             "tts_options": TTS_OPTIONS,
             "flash": "✓ Saved and pushed to Redis",
         },
+    )
+
+
+# ── Flows UI ──────────────────────────────────────────────────────────────────
+
+@router.get("/flows", response_class=HTMLResponse)
+async def flows_list(request: Request, flash: str = ""):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        flows = await conn.fetch(
+            "SELECT id, name, description, is_active, updated_at FROM flows ORDER BY name"
+        )
+        # Count executions per flow
+        counts = await conn.fetch(
+            "SELECT flow_id, COUNT(*) AS run_count FROM flow_executions GROUP BY flow_id"
+        )
+    count_map = {str(r["flow_id"]): r["run_count"] for r in counts}
+    flow_list = []
+    for f in flows:
+        d = dict(f)
+        d["run_count"] = count_map.get(str(d["id"]), 0)
+        flow_list.append(d)
+    return templates.TemplateResponse(
+        request, "flows/list.html",
+        {"flows": flow_list, "flash": flash or None},
+    )
+
+
+@router.get("/flows/new", response_class=HTMLResponse)
+async def new_flow_form(request: Request):
+    starter = {
+        "entry_node_id": "n1",
+        "nodes": [
+            {"id": "n1", "type": "conversation", "label": "Main", "config": {
+                "system_prompt": "You are a helpful assistant.",
+                "greeting": "Hello! How can I help you today?"
+            }},
+            {"id": "n2", "type": "end", "label": "End", "config": {}}
+        ],
+        "edges": [
+            {"id": "e1", "source": "n1", "target": "n2",
+             "condition": {"type": "keyword_matched", "words": ["goodbye", "bye"]}}
+        ]
+    }
+    return templates.TemplateResponse(
+        request, "flows/edit.html",
+        {"flow": None, "definition_json": _json.dumps(starter, indent=2), "errors": []},
+    )
+
+
+@router.post("/flows/new", response_class=HTMLResponse)
+async def create_flow_ui(
+    request: Request,
+    name: str = Form(...),
+    description: str = Form(""),
+    definition_json: str = Form("{}"),
+):
+    errors = []
+    definition = {}
+    try:
+        definition = _json.loads(definition_json)
+    except Exception:
+        errors.append("Invalid JSON in definition field")
+
+    if not errors:
+        errors = validate_flow(definition)
+
+    if errors:
+        return templates.TemplateResponse(
+            request, "flows/edit.html",
+            {"flow": None, "name": name, "description": description,
+             "definition_json": definition_json, "errors": errors},
+        )
+
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO flows (name, description, definition) VALUES ($1,$2,$3) RETURNING id",
+            name, description or None, _json.dumps(definition),
+        )
+    return RedirectResponse(f"/admin/flows/{row['id']}/edit?flash=Flow+created", status_code=303)
+
+
+@router.get("/flows/{flow_id}/edit", response_class=HTMLResponse)
+async def edit_flow_form(request: Request, flow_id: str, flash: str = ""):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM flows WHERE id=$1::uuid", flow_id)
+    if not row:
+        return RedirectResponse("/admin/flows")
+    flow = dict(row)
+    defn = flow.get("definition", {})
+    if isinstance(defn, str):
+        defn = _json.loads(defn)
+    elif hasattr(defn, "keys"):
+        defn = dict(defn)
+    return templates.TemplateResponse(
+        request, "flows/edit.html",
+        {"flow": flow, "definition_json": _json.dumps(defn, indent=2),
+         "errors": [], "flash": flash or None},
+    )
+
+
+@router.post("/flows/{flow_id}/edit", response_class=HTMLResponse)
+async def save_flow_ui(
+    request: Request,
+    flow_id: str,
+    name: str = Form(...),
+    description: str = Form(""),
+    definition_json: str = Form("{}"),
+):
+    errors = []
+    definition = {}
+    try:
+        definition = _json.loads(definition_json)
+    except Exception:
+        errors.append("Invalid JSON in definition field")
+
+    if not errors:
+        errors = validate_flow(definition)
+
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        flow_row = await conn.fetchrow("SELECT * FROM flows WHERE id=$1::uuid", flow_id)
+
+    if not flow_row:
+        return RedirectResponse("/admin/flows")
+
+    if errors:
+        flow = dict(flow_row)
+        return templates.TemplateResponse(
+            request, "flows/edit.html",
+            {"flow": flow, "name": name, "description": description,
+             "definition_json": definition_json, "errors": errors},
+        )
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE flows SET name=$2, description=$3, definition=$4, updated_at=NOW() WHERE id=$1::uuid",
+            flow_id, name, description or None, _json.dumps(definition),
+        )
+    return RedirectResponse(f"/admin/flows/{flow_id}/edit?flash=Saved", status_code=303)
+
+
+@router.post("/flows/{flow_id}/delete", response_class=HTMLResponse)
+async def delete_flow_ui(request: Request, flow_id: str):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE flows SET is_active=false, updated_at=NOW() WHERE id=$1::uuid", flow_id
+        )
+    return RedirectResponse("/admin/flows?flash=Flow+deactivated", status_code=303)
+
+
+@router.get("/flows/{flow_id}/executions", response_class=HTMLResponse)
+async def flow_executions(request: Request, flow_id: str):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        flow = await conn.fetchrow("SELECT id, name FROM flows WHERE id=$1::uuid", flow_id)
+        execs = await conn.fetch(
+            """SELECT id, call_uuid, current_node_id, status, state, started_at, ended_at
+               FROM flow_executions WHERE flow_id=$1::uuid
+               ORDER BY started_at DESC LIMIT 50""",
+            flow_id,
+        )
+    if not flow:
+        return RedirectResponse("/admin/flows")
+    exec_list = []
+    for e in execs:
+        d = dict(e)
+        if isinstance(d.get("state"), str):
+            d["state"] = _json.loads(d["state"])
+        exec_list.append(d)
+    return templates.TemplateResponse(
+        request, "flows/executions.html",
+        {"flow": dict(flow), "executions": exec_list},
     )

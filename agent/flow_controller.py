@@ -107,6 +107,26 @@ class FlowController:
             return
         await self._process_event({"type": "silence_timeout"})
 
+    async def on_webhook_result(self, result: dict) -> None:
+        if self._finished:
+            return
+        await self._process_event({"type": "webhook_result", "result": result})
+
+    async def execute_instant_node(self, node_id: str, node_type: str, cfg: dict) -> None:
+        """
+        Execute a node that doesn't wait for user audio — set_variable, condition.
+        Fires an appropriate event so the engine evaluates outgoing edges immediately.
+        """
+        if self._finished:
+            return
+        if node_type == "set_variable":
+            var = cfg.get("variable", "")
+            val = cfg.get("value", "")
+            await self._process_event({"type": "set_variable", "var": var, "value": str(val)})
+        elif node_type == "condition":
+            # Fire a no-op event so the engine evaluates variable_equals edges
+            await self._process_event({"type": "condition_evaluate"})
+
     # ── Core state machine ────────────────────────────────────────────────────
 
     async def _process_event(self, event: dict) -> None:

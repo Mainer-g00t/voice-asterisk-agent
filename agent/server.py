@@ -85,7 +85,7 @@ async def handle_call(
     # inside create_pipeline_task (e.g. on_client_connected) are in place
     # before transport.connect() fires them.
     transition_queue: asyncio.Queue = asyncio.Queue()
-    task, call_log, flow_controller = await create_pipeline_task(
+    task, call_log, flow_controller, llm_context = await create_pipeline_task(
         transport, call_uuid, transition_queue
     )
 
@@ -102,6 +102,9 @@ async def handle_call(
         Drain the transition queue and act on flow node transitions.
         Runs alongside the pipeline runner so it doesn't block audio processing.
         """
+        import httpx as _httpx
+        from pipecat.frames.frames import LLMContextFrame
+
         while not runner_task.done():
             try:
                 frame: FlowTransitionFrame = await asyncio.wait_for(
@@ -115,42 +118,81 @@ async def handle_call(
             logger.info(f"[flow] Transition → node={frame.node_id} type={ntype}")
 
             if ntype == "end":
-                # Hang up gracefully.
-                logger.info(f"[flow] End node reached — hanging up call {call_uuid}")
+                logger.info(f"[flow] End node — hanging up call {call_uuid}")
                 await task.cancel()
                 break
 
             elif ntype == "transfer":
                 destination = cfg.get("destination", "")
-                logger.info(f"[flow] Transfer → {destination}")
-                # AMI Redirect: send the active channel to a new extension.
+                context = cfg.get("dialplan_context", "default")
+                logger.info(f"[flow] Transfer → {destination!r}")
                 try:
                     from ami_client import ami_redirect
                     channel_var = os.environ.get("ACTIVE_CHANNEL", "")
-                    await ami_redirect(channel_var or call_uuid, destination)
+                    await ami_redirect(channel_var or call_uuid, destination, context)
                 except Exception as exc:
                     logger.warning(f"[flow] AMI redirect failed: {exc}")
                 await task.cancel()
                 break
 
             elif ntype == "say":
-                # Inject a TTS message into the pipeline as a synthetic user turn.
+                # Inject a fixed message: override system prompt to "say this verbatim",
+                # then add a synthetic user turn to trigger LLM → TTS.
                 message = cfg.get("message", "")
-                if message:
-                    from pipecat.frames.frames import LLMContextFrame
-                    from pipecat.processors.aggregators.llm_context import LLMContext
-                    # Re-queue as a user message so LLM → TTS speaks it.
-                    logger.info(f"[flow] Say node: injecting message")
-                    # The say node immediately takes its default edge; FlowController
-                    # will fire a turn_end event after the LLM responds.
+                if message and flow_controller:
+                    logger.info(f"[flow] Say node: {message[:60]}…")
+                    llm_context.messages[0] = {
+                        "role": "system",
+                        "content": f"Say this to the caller exactly as written, with no additions: {message}",
+                    }
+                    llm_context.add_message({"role": "user", "content": "proceed"})
+                    await task.queue_frames([LLMContextFrame(llm_context)])
+                    # After LLM speaks (turn_end event), FlowController fires default edge
 
             elif ntype == "conversation":
-                # System prompt may have changed — handled inside pipeline via
-                # FlowController updating the context on the next on_transcription cycle.
-                logger.info(f"[flow] Entering conversation node {frame.node_id}")
+                # Entering a new conversation phase — update system prompt and optionally
+                # inject a greeting to kick off the LLM.
+                new_prompt = cfg.get("system_prompt", "")
+                greeting = cfg.get("greeting", "")
+                if new_prompt:
+                    llm_context.messages[0] = {"role": "system", "content": new_prompt}
+                    logger.info(f"[flow] Conversation node: updated system prompt")
+                if greeting:
+                    llm_context.add_message({"role": "user", "content": greeting})
+                    await task.queue_frames([LLMContextFrame(llm_context)])
 
-            # Other node types (webhook, condition, set_variable) are handled
-            # by the FlowController itself and don't require server-side action.
+            elif ntype == "webhook":
+                # POST to the configured URL with current flow state, then let
+                # FlowController evaluate webhook_field edges on the response.
+                url = cfg.get("url", "")
+                if url and flow_controller:
+                    try:
+                        timeout = float(cfg.get("timeout", 10))
+                        async with _httpx.AsyncClient() as client:
+                            resp = await client.post(
+                                url,
+                                json={"state": flow_controller.state, "node_id": frame.node_id},
+                                timeout=timeout,
+                            )
+                            result = resp.json()
+                        logger.info(f"[flow] Webhook {url} → {resp.status_code}")
+                        await flow_controller.on_webhook_result(result)
+                    except Exception as exc:
+                        logger.warning(f"[flow] Webhook failed: {exc}")
+                        if flow_controller:
+                            await flow_controller.on_webhook_result({"error": str(exc)})
+
+            elif ntype in ("set_variable", "condition"):
+                # Instant nodes: update state / evaluate edges without audio.
+                if flow_controller:
+                    await flow_controller.execute_instant_node(frame.node_id, ntype, cfg)
+
+            elif ntype == "gather_dtmf":
+                # DTMF is already forwarded by the transport as DTMFInputFrame.
+                # FlowWatcherProcessor routes it to FlowController.on_dtmf().
+                # Nothing extra needed here — just log the wait.
+                timeout = cfg.get("dtmf_timeout", 10)
+                logger.info(f"[flow] Gather DTMF node — waiting up to {timeout}s")
 
     flow_handler_task = asyncio.create_task(_flow_transition_handler())
 

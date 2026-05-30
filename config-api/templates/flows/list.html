@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Flows — Voice Agent Admin{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">🔀 Call Flows</h4>
+  <a href="/admin/flows/new" class="btn btn-primary btn-sm">+ New Flow</a>
+</div>
+
+{% if flash %}
+<div class="alert alert-success flash py-2">{{ flash }}</div>
+{% endif %}
+
+<div class="card shadow-sm">
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Name</th>
+          <th>Description</th>
+          <th class="text-center">Runs</th>
+          <th>Updated</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in flows %}
+        <tr>
+          <td><a href="/admin/flows/{{ f.id }}/edit" class="fw-semibold text-decoration-none">{{ f.name }}</a></td>
+          <td class="text-muted small">{{ f.description or "—" }}</td>
+          <td class="text-center">
+            {% if f.run_count %}
+            <a href="/admin/flows/{{ f.id }}/executions" class="badge bg-secondary text-decoration-none">{{ f.run_count }}</a>
+            {% else %}
+            <span class="text-muted">0</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ f.updated_at.strftime("%Y-%m-%d %H:%M") if f.updated_at else "—" }}</td>
+          <td>
+            {% if f.is_active %}
+            <span class="badge bg-success-subtle text-success border border-success-subtle">active</span>
+            {% else %}
+            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">inactive</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            <a href="/admin/flows/{{ f.id }}/edit" class="btn btn-sm btn-outline-secondary">Edit</a>
+            <form method="post" action="/admin/flows/{{ f.id }}/delete" class="d-inline"
+                  onsubmit="return confirm('Deactivate this flow?')">
+              <button class="btn btn-sm btn-outline-danger">Deactivate</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-center text-muted py-4">No flows yet. <a href="/admin/flows/new">Create one →</a></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="mt-4 p-3 bg-light rounded border small text-muted">
+  <strong>Node types:</strong>
+  <code>conversation</code> • <code>say</code> • <code>gather_dtmf</code> •
+  <code>transfer</code> • <code>webhook</code> • <code>set_variable</code> •
+  <code>condition</code> • <code>end</code>
+  &nbsp;|&nbsp;
+  <strong>Conditions:</strong>
+  <code>keyword_matched</code> • <code>turn_count_gte</code> • <code>dtmf_digit</code> •
+  <code>tool_result</code> • <code>variable_equals</code> • <code>default</code>
+</div>
+{% endblock %}

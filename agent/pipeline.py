@@ -308,7 +308,7 @@ async def create_pipeline_task(
     transport: AudioSocketTransport,
     call_uuid: str,
     transition_queue: "asyncio.Queue | None" = None,
-) -> tuple["PipelineTask", "CallLogger", "FlowController | None"]:
+) -> tuple["PipelineTask", "CallLogger", "FlowController | None", "LLMContext"]:
     import asyncio as _asyncio
 
     slug = os.environ.get("AGENT_SLUG", "basic")
@@ -431,4 +431,4 @@ async def create_pipeline_task(
         call_log.on_disconnected(reason="hangup")
         await task.cancel()
 
-    return task, call_log, flow_controller
+    return task, call_log, flow_controller, context

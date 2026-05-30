@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Executions — {{ flow.name }} — Voice Agent Admin{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h4 class="mb-0">📊 Executions — <span class="text-muted">{{ flow.name }}</span></h4>
+  <a href="/admin/flows/{{ flow.id }}/edit" class="btn btn-sm btn-outline-secondary">← Edit Flow</a>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body p-0">
+    <table class="table table-hover mb-0 small">
+      <thead class="table-light">
+        <tr>
+          <th>Call UUID</th>
+          <th>Status</th>
+          <th>Current Node</th>
+          <th>Turn Count</th>
+          <th>Started</th>
+          <th>Duration</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in executions %}
+        {% set state = e.state or {} %}
+        <tr>
+          <td class="font-monospace" style="font-size:0.78rem">
+            <a href="/admin/calls/{{ e.call_uuid }}" class="text-decoration-none">{{ e.call_uuid[:16] }}…</a>
+          </td>
+          <td>
+            {% if e.status == "completed" %}
+            <span class="badge bg-success-subtle text-success border border-success-subtle">completed</span>
+            {% elif e.status == "transferred" %}
+            <span class="badge bg-info-subtle text-info border border-info-subtle">transferred</span>
+            {% elif e.status == "running" %}
+            <span class="badge bg-warning-subtle text-warning border border-warning-subtle">running</span>
+            {% elif e.status == "failed" %}
+            <span class="badge bg-danger-subtle text-danger border border-danger-subtle">failed</span>
+            {% elif e.status == "no_answer" %}
+            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">no_answer</span>
+            {% else %}
+            <span class="badge bg-light text-muted">{{ e.status }}</span>
+            {% endif %}
+          </td>
+          <td><code class="small">{{ e.current_node_id or "—" }}</code></td>
+          <td class="text-center">{{ state.get("turn_count", "—") }}</td>
+          <td class="text-muted">{{ e.started_at.strftime("%Y-%m-%d %H:%M:%S") if e.started_at else "—" }}</td>
+          <td class="text-muted">
+            {% if e.started_at and e.ended_at %}
+              {% set dur = (e.ended_at - e.started_at).total_seconds() | int %}
+              {{ dur }}s
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-center text-muted py-4">No executions yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if executions %}
+<p class="text-muted small mt-2">Showing up to 50 most recent executions.</p>
+{% endif %}
+{% endblock %}
