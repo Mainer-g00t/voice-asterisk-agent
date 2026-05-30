@@ -54,7 +54,7 @@ Condition types
   tool_result      – state["last_tool_results"][tool] field matches value
                      {"tool": "...", "field": "...", "value": "..."}
   intent_is        – state["last_intent"] == {"intent": "..."}
-  variable_equals  – state["variables"][var] == {"var": "...", "value": "..."}
+  variable_equals  – state["variables"][var] or any built-in state key (last_dtmf, last_transcript, turn_count, last_webhook_result, …)
   call_no_answer   – state["call_status"] == "no_answer" (set by originate API)
   webhook_field    – state["last_webhook_result"][field] == value
                      {"field": "...", "value": "..."}
@@ -166,7 +166,10 @@ def _evaluate_condition(condition: dict, state: dict, event: dict) -> bool:
     if ctype == "variable_equals":
         var = condition.get("var", "")
         expected = str(condition.get("value", ""))
-        actual = str(state.get("variables", {}).get(var, ""))
+        # Check user-defined variables first, then fall back to built-in state keys
+        # (last_dtmf, last_transcript, turn_count, last_webhook_result, etc.)
+        merged = {**state, **state.get("variables", {})}
+        actual = str(merged.get(var, ""))
         return actual == expected
 
     if ctype == "call_no_answer":
