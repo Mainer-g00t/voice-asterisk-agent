@@ -29,3 +29,4 @@ env/
 # Flow editor — build artifacts (produced by Docker multi-stage build)
 config-api/flow-editor/node_modules/
 config-api/static/
+TODO.md
