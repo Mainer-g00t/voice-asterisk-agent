@@ -2,13 +2,17 @@
 Call logs API — receive call data from agents, expose for the admin UI.
 """
 
+import asyncio
 import json
 from datetime import datetime
 
+import httpx
 from fastapi import APIRouter, HTTPException
+from loguru import logger
 from pydantic import BaseModel
 
 import db
+import redis_client
 
 router = APIRouter()
 
@@ -67,7 +71,29 @@ async def receive_call_log(body: CallLogIn):
             body.stt_provider, body.llm_provider, body.tts_provider,
             body.end_reason,
         )
+    # Fire CDR webhook if a callback_url was registered at originate time.
+    meta = await redis_client.get_call_meta(body.call_uuid)
+    callback_url = meta.get("callback_url")
+    if callback_url:
+        cdr_payload = {
+            **body.model_dump(),
+            "did": did,
+            "metadata": meta.get("metadata", {}),
+        }
+        asyncio.create_task(_fire_callback(callback_url, body.call_uuid, cdr_payload))
+
     return {"status": "ok", "call_uuid": body.call_uuid}
+
+
+async def _fire_callback(url: str, call_uuid: str, payload: dict) -> None:
+    """POST the completed CDR to the registered callback URL. Fire-and-forget."""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=payload, timeout=10.0)
+            resp.raise_for_status()
+        logger.info(f"CDR callback fired for {call_uuid} → {url} ({resp.status_code})")
+    except Exception as exc:
+        logger.warning(f"CDR callback failed for {call_uuid} → {url}: {exc}")
 
 
 @router.get("")

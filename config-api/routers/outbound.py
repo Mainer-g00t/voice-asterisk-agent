@@ -42,7 +42,8 @@ class OriginateRequest(BaseModel):
     caller_id: str = "Voice Agent <+10000000000>"
     timeout_seconds: int = 30              # ring timeout before giving up
     template_vars: dict[str, str] = {}    # substituted into {placeholders} in prompt and greeting
-    metadata: dict[str, Any] = {}         # passed through to call_log for campaign tracking
+    metadata: dict[str, Any] = {}         # passed through to the CDR callback payload
+    callback_url: str | None = None       # POSTed with the full CDR when the call ends
 
 
 @router.post("/originate", status_code=202)
@@ -75,6 +76,13 @@ async def originate_call(body: OriginateRequest):
     # Store template vars in Redis so the agent can substitute them into the prompt/greeting.
     if body.template_vars:
         await redis_client.push_call_vars(call_uuid, body.template_vars)
+
+    # Store call meta (callback_url, metadata) for retrieval when the call ends.
+    if body.callback_url or body.metadata:
+        await redis_client.push_call_meta(call_uuid, {
+            "callback_url": body.callback_url,
+            "metadata": body.metadata,
+        })
 
     # Ensure the agent container is running before Asterisk tries to connect.
     try:

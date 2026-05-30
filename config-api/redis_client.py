@@ -53,6 +53,29 @@ async def delete_agent_snapshot(slug: str) -> None:
         logger.warning(f"Redis delete failed for '{slug}': {exc}")
 
 
+async def push_call_meta(call_uuid: str, meta: dict) -> None:
+    """
+    Store per-call metadata (callback_url, campaign metadata) keyed by call UUID.
+    Read back by calls.py after the agent posts the completed call record.
+    Key: call:meta:{call_uuid}  TTL: same as call vars.
+    """
+    try:
+        await get_redis().setex(
+            f"call:meta:{call_uuid}", CALL_VARS_TTL, json.dumps(meta)
+        )
+    except Exception as exc:
+        logger.warning(f"Redis: failed to store call meta for {call_uuid}: {exc}")
+
+
+async def get_call_meta(call_uuid: str) -> dict:
+    """Retrieve call metadata stored at originate time. Returns {} on miss."""
+    try:
+        raw = await get_redis().get(f"call:meta:{call_uuid}")
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
 async def push_call_vars(call_uuid: str, vars: dict) -> None:
     """
     Store per-call template variables so the agent can substitute them into
