@@ -5,7 +5,7 @@ import { resolve } from 'path'
 export default defineConfig({
   plugins: [react()],
   build: {
-    outDir: '../static/flow-editor',
+    outDir: 'dist',
     emptyOutDir: true,
     rollupOptions: {
       input: resolve(__dirname, 'src/main.jsx'),

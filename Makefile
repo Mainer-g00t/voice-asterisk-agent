@@ -56,6 +56,8 @@ prometheus:
 # The Docker build handles this automatically via multi-stage; run locally after editing flow-editor/src/
 build-frontend:
 	cd config-api/flow-editor && npm ci && npm run build
+	mkdir -p config-api/static/flow-editor
+	cp -r config-api/flow-editor/dist/. config-api/static/flow-editor/
 
 # Apply all pending SQL migrations to the running Postgres container
 # Usage: make migrate  (safe to run multiple times — Postgres ignores IF NOT EXISTS)
