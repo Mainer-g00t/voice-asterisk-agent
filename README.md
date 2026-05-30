@@ -13,7 +13,7 @@ Pipecat has no native Asterisk support, so this project implements the
 [AudioSocket protocol](https://docs.asterisk.org/Configuration/Channel-Drivers/AudioSocket/)
 as a first-class Pipecat transport.
 
-Agent configuration, phone routing, and call history are managed through a built-in **web admin UI** backed by Postgres + Redis — no code changes or container restarts needed.
+Agent configuration, phone routing, call flows, and call history are managed through a built-in **web admin UI** backed by Postgres + Redis — no code changes or container restarts needed.
 
 ---
 
@@ -67,7 +67,7 @@ Dial any number — the dialplan routes calls based on the **Phone Routes** tabl
 
 ## Admin UI — http://localhost:8080/admin
 
-Four sections, all editable live with no restarts:
+Six sections, all editable live with no restarts:
 
 ### 📞 Routes — phone number → agent mapping
 
@@ -77,11 +77,13 @@ Each row maps a dialed number or Asterisk extension pattern to an agent slug.
 - Specific DIDs (e.g. `1000`, `+15551234567`) are matched first
 - **Apply** starts the required `agent-{slug}` Docker containers, regenerates `extensions.conf`, and reloads the Asterisk dialplan in one click
 
-### 🤖 Agents — prompts and providers
+### 🤖 Agents — prompts, providers, and flow assignment
 
 Each agent has a system prompt, greeting trigger, and per-provider settings (STT / LLM / TTS). Changes take effect on the next incoming call — in-flight calls finish with their original config.
 
 Prompts and greetings support **`{placeholder}` substitution** — values are injected at call time via the outbound API (see below).
+
+Each agent can optionally have a **flow** assigned — when set, every call to that agent runs the flow's node graph instead of the flat single-prompt model.
 
 | Slug | What it does |
 |------|-------------|
@@ -111,6 +113,63 @@ Available handler types:
 
 Agent-specific tools override global tools with the same name. All changes push to Redis immediately.
 
+### 🔀 Flows — multi-step call logic
+
+Flows define branching call graphs: nodes connected by conditional edges. The engine runs locally inside the agent container — no extra latency per event.
+
+**Node types:**
+
+| Type | What it does |
+|---|---|
+| `conversation` | STT → LLM → TTS loop with its own system prompt and greeting. Stays until an edge condition fires. |
+| `say` | Plays a fixed TTS message verbatim, then takes the default edge. |
+| `gather_dtmf` | Waits for a keypress (0–9, *, #), branches on the digit. |
+| `transfer` | Issues an Asterisk AMI Redirect to a destination extension/number. |
+| `webhook` | HTTP POSTs current flow state to a URL; branches on a field in the JSON response. |
+| `set_variable` | Writes a value into flow state variables, then takes the default edge. |
+| `condition` | Branches immediately on a variable value without audio. |
+| `end` | Hangs up and marks execution complete. |
+
+**Edge condition types:**
+
+| Condition | Fires when… |
+|---|---|
+| `keyword_matched` | STT transcript contains any of the listed words |
+| `turn_count_gte` | Turn counter reaches N |
+| `dtmf_digit` | User pressed a specific digit |
+| `tool_result` | A named tool returned a specific field value |
+| `variable_equals` | A flow variable equals a value |
+| `silence_timeout` | No user input for N seconds |
+| `webhook_field` | Webhook response field equals a value |
+| `default` | Always matches (use as last/fallback edge) |
+
+**Assigning a flow to an agent:** Admin UI → Agents → edit → 🔀 Flow dropdown → pick a flow → Save. Every call (inbound and outbound) to that agent then runs the flow.
+
+**Per-call override (outbound):** pass `flow_id` in `POST /api/outbound/originate` to use a different flow for a specific call regardless of the agent's default.
+
+**Execution history:** Admin UI → 🔀 Flows → click the run-count badge, or use the shortcut button on the agent edit page. Each execution shows status, final node, turn count, and duration.
+
+The flow definition is a JSON blob stored in Postgres:
+```json
+{
+  "entry_node_id": "n1",
+  "nodes": [
+    {"id": "n1", "type": "conversation", "label": "Main", "config": {
+      "system_prompt": "You are a sales agent calling {name}.",
+      "greeting": "Hello {name}, this is Acme calling."
+    }},
+    {"id": "n2", "type": "transfer", "label": "To human", "config": {"destination": "operator"}},
+    {"id": "n3", "type": "end", "label": "End", "config": {}}
+  ],
+  "edges": [
+    {"id": "e1", "source": "n1", "target": "n2",
+     "condition": {"type": "keyword_matched", "words": ["speak to someone", "human"]}},
+    {"id": "e2", "source": "n1", "target": "n3",
+     "condition": {"type": "turn_count_gte", "n": 15}}
+  ]
+}
+```
+
 ### 📋 Calls — call history and transcripts
 
 Every completed call is logged automatically: direction (inbound 📞 / outbound 📤), duration, turn count, STT/LLM/TTS providers used, end reason, and the full conversation transcript. Click **Transcript** on any row to view the chat-bubble replay.
@@ -119,7 +178,7 @@ Every completed call is logged automatically: direction (inbound 📞 / outbound
 
 ## Outbound calls API
 
-Originate a call programmatically — Asterisk dials the destination, and when answered the full STT→LLM→TTS pipeline runs exactly as for inbound calls. All logging and telemetry work identically.
+Originate a call programmatically — Asterisk dials the destination, and when answered the full STT→LLM→TTS pipeline runs exactly as for inbound calls. All logging, telemetry, and flows work identically.
 
 ```bash
 POST http://localhost:8080/api/outbound/originate
@@ -131,10 +190,13 @@ POST http://localhost:8080/api/outbound/originate
   "agent_slug": "sales",
   "caller_id": "Acme Corp <+10000000000>",
   "timeout_seconds": 30,
+  "flow_id": "optional-flow-uuid",
   "template_vars": {
     "name": "Luis",
     "product": "Premium Plan"
-  }
+  },
+  "metadata": {"campaign_id": "q4-promo"},
+  "callback_url": "https://your-campaign-manager/cdr"
 }
 ```
 
@@ -144,7 +206,7 @@ The agent container for the requested slug is **started automatically** if not a
 
 ### Prompt placeholders
 
-Define `{placeholder}` patterns in the agent's system prompt and greeting trigger. They are substituted at call time using `template_vars`:
+Define `{placeholder}` patterns in the agent's system prompt, greeting trigger, or flow node configs. They are substituted at call time using `template_vars`:
 
 ```
 System prompt:  "You are a sales agent for Acme. You are calling {name} about {product}."
@@ -153,11 +215,32 @@ Greeting:       "Hello {name}, this is an automated call from Acme."
 
 Unknown placeholders are left as-is (`{unknown}` → `{unknown}`), so partial substitution never crashes.
 
+### CDR webhook callback
+
+When a call ends, config-api POSTs the completed call record to `callback_url`:
+
+```json
+{
+  "call_uuid": "...",
+  "agent_slug": "sales",
+  "direction": "outbound",
+  "destination": "+15551234567",
+  "started_at": "...", "ended_at": "...",
+  "duration_seconds": 87,
+  "turn_count": 5,
+  "end_reason": "hangup",
+  "transcript": [...],
+  "metadata": {"campaign_id": "q4-promo"}
+}
+```
+
+Failures are logged as warnings and never affect the call record. Use this to integrate with a campaign manager or CRM.
+
 ### Outbound configuration
 
 | `.env` variable | Default | Description |
 |----------------|---------|-------------|
-| `AMI_SECRET` | `voiceai_ami_secret` | Asterisk AMI password |
+| `AMI_SECRET` | — | Asterisk AMI password |
 | `OUTBOUND_CHANNEL_FORMAT` | `PJSIP/{destination}` | Channel template. `{destination}` is replaced with the dialed number. Use `PJSIP/{destination}@trunk` for a SIP trunk. |
 
 For local testing with the softphone: `destination=softphone` rings the registered softphone directly.
@@ -182,7 +265,6 @@ Each agent container exposes a Prometheus `/metrics` endpoint on port 9090. Prom
 | `voiceai_stt_ttfb_seconds` | Histogram | STT time-to-first-byte |
 | `voiceai_llm_ttfb_seconds` | Histogram | LLM time-to-first-token |
 | `voiceai_tts_ttfb_seconds` | Histogram | TTS time-to-first-audio |
-| `voiceai_turn_e2e_seconds` | Histogram | Full user→bot round trip |
 | `voiceai_llm_tokens_total` | Counter | Prompt + completion tokens |
 | `voiceai_tts_chars_total` | Counter | TTS characters processed |
 | `voiceai_calls_active` | Gauge | Concurrent calls right now |
@@ -253,10 +335,10 @@ Admin UI ──▶ config-api (FastAPI :8080) ──▶ Postgres (source of trut
                                         └──▶ Redis   (hot cache, TTL 300s)
                                                 ▲
                                         agent reads per-call (~1 ms)
-                                        call template vars stored here too
+                                        call template vars, flow execution stored here too
 ```
 
-Postgres tables: `agents`, `provider_configs`, `tool_definitions`, `specialist_configs`, `config_versions`, `phone_routes`, `call_logs`.
+Postgres tables: `agents`, `provider_configs`, `tool_definitions`, `specialist_configs`, `config_versions`, `phone_routes`, `call_logs`, `flows`, `flow_executions`, `flow_events`.
 
 Migrations live in `config-api/migrations/`. Run `make migrate` after pulling new ones.
 
@@ -289,7 +371,7 @@ make shell                         # shell into agent container
 ./scripts/test-stt.sh path/to/audio.wav
 ./scripts/test-llm.sh "Who are you?"
 
-# API docs (includes outbound originate, call status, tool management)
+# API docs (includes outbound originate, call status, flows, tool management)
 open http://localhost:8080/docs
 ```
 
@@ -299,9 +381,13 @@ open http://localhost:8080/docs
 
 - **One pipeline per call**: `server.py` creates a fresh `AudioSocketTransport` + Pipecat `PipelineTask` per TCP connection. Inbound and outbound calls use the same code path.
 - **Config loaded per call**: `pipeline.py` reads the agent snapshot from Redis at call start. Also reads per-call template vars (`call:vars:{uuid}`) and applies them to the prompt and greeting before the pipeline starts.
+- **Flow execution**: if the agent config (or originate request) includes a `flow_id`, a `FlowController` is attached to the pipeline. `FlowWatcherProcessor` monitors STT transcriptions, DTMF digits, and LLM turn-end events; when an edge condition fires it emits a `FlowTransitionFrame`. `server.py` acts on it (say, conversation, transfer, end, webhook, set_variable, condition).
+- **Inbound flow init**: for inbound calls, `pipeline.py` calls `POST /internal/flows/init-execution` at call start to create the execution row and warm the Redis cache — same path as outbound from that point.
+- **Flow execution log**: at call end, the agent bulk-posts all events (node_entered, edge_taken, event_received) to `POST /api/flows/executions/complete` for analytics and replay.
 - **Hangup handling**: a watchdog coroutine watches `reader.at_eof()`, records the hangup time, and force-cancels the pipeline after 2 s if it hasn't self-terminated.
 - **Call logging**: `call_logger.py` collects timestamps, direction, and the full conversation from `LLMContext.messages` after each call, then POSTs to `POST /api/calls`. Outbound calls are pre-created as `direction=outbound` at originate time; the agent upserts the transcript on completion.
-- **Outbound flow**: `POST /api/outbound/originate` → auto-starts agent container → stores template vars in Redis → AMI Originate → Asterisk dials → `[outbound-agent]` dialplan → AudioSocket → agent pipeline.
+- **Outbound flow**: `POST /api/outbound/originate` → auto-starts agent container → stores template vars + flow execution in Redis → AMI Originate → Asterisk dials → `[outbound-agent]` dialplan → AudioSocket → agent pipeline.
+- **CDR webhook**: after call log upsert, config-api fires `callback_url` (if set at originate time) as a background task. Failures are warnings only.
 - **Tool handlers stay in code**: tool *schemas* live in the DB; handlers are Python async functions registered by `handler_type` string in `agent/tool_handlers/`.
 - **Prometheus metrics**: `MetricsCapture` FrameProcessor intercepts Pipecat `MetricsFrame` objects and records TTFB/token/char metrics. Call-level counters tracked in `server.py`.
 - **Audio pacing**: output sends 20 ms chunks with `asyncio.sleep(0.020)` to prevent Asterisk's AudioSocket frame-queue overflow.

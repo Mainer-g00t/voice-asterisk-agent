@@ -46,15 +46,15 @@ curl -X POST http://localhost:8080/api/routes/apply   # restart with new image
 ./scripts/test-llm.sh
 
 # Admin UI
-open http://localhost:8080/admin    # Routes, Agents, Tools, Calls
-open http://localhost:8080/docs     # API docs (agents, tools, outbound, calls)
+open http://localhost:8080/admin    # Routes, Agents, Tools, Flows, Calls
+open http://localhost:8080/docs     # API docs (agents, tools, outbound, flows, calls)
 ```
 
 ## Architecture
 
 ### Config store: Postgres + Redis (`config-api/`)
 
-Agent configuration (prompts, provider selection, tool schemas, specialist prompts) lives in Postgres and is cached in Redis. The agent reads from Redis on every call (~1 ms). On a cache miss it falls back to `config-api`'s `/internal/agents/{slug}/snapshot` endpoint, which re-reads Postgres and re-warms Redis.
+Agent configuration (prompts, provider selection, tool schemas, specialist prompts, flow assignment) lives in Postgres and is cached in Redis. The agent reads from Redis on every call (~1 ms). On a cache miss it falls back to `config-api`'s `/internal/agents/{slug}/snapshot` endpoint, which re-reads Postgres and re-warms Redis.
 
 **Push-on-save:** when an admin saves an agent, `config-api` writes to Postgres then immediately pushes a denormalized snapshot to Redis. Next call picks up the new config — no restart needed.
 
@@ -65,15 +65,53 @@ Agent configuration (prompts, provider selection, tool schemas, specialist promp
 - `tool_definitions` (global: `agent_id=NULL, is_global=TRUE`), `agent_tool_refs` — global tool library
 - `phone_routes` — DID → agent_slug routing
 - `call_logs` — per-call metadata, transcript, direction, destination
+- `flows` — flow definitions (JSON blob: nodes + edges)
+- `flow_executions` — per-call execution state (current node, runtime variables, status)
+- `flow_events` — audit log of every node entry, edge traversal, and event received
+
+### Call Flows (`config-api/flow_engine.py`, `agent/flow_controller.py`)
+
+Flows define multi-step branching call logic as a node graph. The engine is a stateless Python module (`flow_engine.py`) copied into both `config-api/` and `agent/` — it runs locally inside the agent container with no network hop per event.
+
+**Node types:** `conversation` | `say` | `gather_dtmf` | `transfer` | `webhook` | `set_variable` | `condition` | `end`
+
+**Edge condition types:** `keyword_matched` | `turn_count_gte` | `dtmf_digit` | `tool_result` | `variable_equals` | `silence_timeout` | `webhook_field` | `default`
+
+**Flow definition shape** (stored as JSONB in `flows.definition`):
+```json
+{
+  "entry_node_id": "n1",
+  "nodes": [{"id":"n1","type":"conversation","label":"...","config":{...}}],
+  "edges": [{"id":"e1","source":"n1","target":"n2","condition":{"type":"keyword_matched","words":["bye"]}}]
+}
+```
+
+**Assigning flows:**
+- Admin UI → Agents → edit → 🔀 Flow dropdown → pick flow → Save (applies to all calls to this agent)
+- `POST /api/outbound/originate` with `"flow_id": "..."` — per-call override, ignores agent's default flow
+
+**Inbound call flow init:** `pipeline.py` checks if `flow_id` is in the agent config and calls `POST /internal/flows/init-execution` to create the DB row + warm Redis (`flow:exec:{call_uuid}`). For outbound calls this is pre-created by `outbound.py` before dialing.
+
+**Agent-side execution:**
+- `FlowWatcherProcessor(FrameProcessor)` sits between STT and the user aggregator in the pipeline — watches `TranscriptionFrame` (keyword matching), `DTMFInputFrame` (DTMF), `LLMFullResponseEndFrame` (turn counting)
+- `FlowController` is the per-call state machine. When an edge fires it puts a `FlowTransitionFrame` on an `asyncio.Queue`
+- `server.py` has `_flow_transition_handler()` running alongside the pipeline runner — reads the queue and acts: `end` → cancel pipeline, `transfer` → AMI Redirect, `say` → inject TTS message via LLMContextFrame, `conversation` → update system prompt, `webhook` → HTTP POST, `set_variable`/`condition` → delegate back to FlowController
+- At call end, `FlowController.finalize()` bulk-posts event log to `POST /api/flows/executions/complete`
+
+**DTMF:** `AudioSocketInputTransport._read_loop()` emits `DTMFInputFrame` when Asterisk sends a type `0x03` frame. This flows upstream through the pipeline to `FlowWatcherProcessor`.
+
+**New frames** (`agent/frames.py`): `DTMFInputFrame(digit)`, `FlowTransitionFrame(node_id, node_type, node_config, edge_id)`.
 
 ### Outbound calls (`config-api/routers/outbound.py`, `config-api/ami_client.py`)
 
 `POST /api/outbound/originate` triggers an outbound call:
 1. Validates agent slug, pre-creates `call_logs` row with `direction='outbound'`
 2. Stores `template_vars` in Redis at `call:vars:{call_uuid}` (TTL 10 min)
-3. Calls `docker_manager.ensure_agent_running(slug)` — auto-starts the container if needed
-4. Sends AMI `Originate` to Asterisk via TCP 5038 (`ami_client.py`)
-5. Asterisk dials; when answered, runs `[outbound-agent]` dialplan → AudioSocket → agent
+3. If `flow_id` provided: fetches flow, creates `flow_executions` row, caches at `flow:exec:{call_uuid}`
+4. Stores `callback_url` + `metadata` in Redis at `call:meta:{call_uuid}` for CDR webhook
+5. Calls `docker_manager.ensure_agent_running(slug)` — auto-starts the container if needed
+6. Sends AMI `Originate` to Asterisk via TCP 5038 (`ami_client.py`)
+7. Asterisk dials; when answered, runs `[outbound-agent]` dialplan → AudioSocket → agent
 
 The agent's `call_log.send()` upserts the pre-created row with transcript/duration on completion. Direction and destination are preserved through the upsert.
 
@@ -81,9 +119,11 @@ The agent's `call_log.send()` upserts the pre-created row with transcript/durati
 
 **Channel format:** `OUTBOUND_CHANNEL_FORMAT` env var (default `PJSIP/{destination}`). `{destination}` is replaced with the request's destination field. For SIP trunks: `PJSIP/{destination}@trunk-name`.
 
+**CDR webhook:** after the agent posts the completed call record to `/api/calls`, `calls.py` reads `call:meta:{call_uuid}` from Redis and fires an async HTTP POST to `callback_url` if set. Failures are logged as warnings and never affect the call record.
+
 ### Prompt template vars
 
-Agent `system_prompt` and `greeting_trigger` support `{placeholder}` syntax. At call start, `pipeline.py` reads `call:vars:{call_uuid}` from Redis and substitutes using `str.format_map()`. Unknown placeholders are left as-is (no crash). Inbound calls with no vars are unaffected.
+Agent `system_prompt` and `greeting_trigger` — and flow node `system_prompt`/`greeting` configs — support `{placeholder}` syntax. At call start, `pipeline.py` reads `call:vars:{call_uuid}` from Redis and substitutes using `str.format_map()`. Unknown placeholders are left as-is (no crash). Inbound calls with no vars are unaffected.
 
 Stored by `redis_client.push_call_vars()` in config-api; read by `_load_call_vars()` in agent/pipeline.py.
 
@@ -112,6 +152,7 @@ Pipecat has no native Asterisk support, so this project implements the [AudioSoc
 - **Protocol**: each frame is `[type:1B][length:2B big-endian][payload:NB]`. Types: `0x00` hangup, `0x01` UUID, `0x03` DTMF, `0x10` audio.
 - **Resampling**: Asterisk sends/receives 8 kHz PCM; the pipeline runs at 16 kHz. The transport resamples in both directions.
 - **Output pacing**: Pipecat's audio output task flushes frames as fast as the queue empties. Asterisk's internal AudioSocket queue is fixed-size — bursts overflow it and cause choppy audio. The output transport deliberately paces each 20 ms chunk with `asyncio.sleep(0.020)` to match real-time playback.
+- **DTMF forwarding**: when a `0x03` frame arrives, `_read_loop` emits a `DTMFInputFrame` upstream so `FlowWatcherProcessor` can catch it.
 
 ### Server (`agent/server.py`)
 
@@ -119,17 +160,23 @@ An asyncio TCP server on port 9099. Each connection spawns one `AudioSocketTrans
 
 **Hangup handling**: `runner.run(task)` runs as an asyncio Task alongside a `_hangup_watchdog` coroutine. The watchdog polls `reader.at_eof()` to detect connection close, records the accurate hangup timestamp on `call_log`, then force-cancels the pipeline after `HANGUP_DRAIN_TIMEOUT=2s` if it hasn't self-terminated.
 
+**Flow handling**: `_flow_transition_handler()` runs as a third asyncio Task alongside the runner and watchdog. It drains `transition_queue` and acts on each `FlowTransitionFrame`. At call end, `FlowController.finalize()` is fired as a background task.
+
 The `finally` block always runs `call_log.send()` regardless of how the call ended.
 
 ### Pipeline (`agent/pipeline.py`)
 
-`transport.input() → STT → user aggregator (with SileroVAD) → LLM → TTS → MetricsCapture → transport.output() → assistant aggregator`
+With no flow: `transport.input() → STT → user aggregator (with SileroVAD) → LLM → TTS → MetricsCapture → transport.output() → assistant aggregator`
 
-`create_pipeline_task(transport, call_uuid)` returns `(task, call_log)`. At call start:
+With a flow: `FlowWatcherProcessor` is inserted between STT and the user aggregator.
+
+`create_pipeline_task(transport, call_uuid, transition_queue)` returns `(task, call_log, flow_controller, context)`. At call start:
 1. Reads agent config from Redis (or config-api fallback)
 2. Reads per-call template vars from Redis (`call:vars:{call_uuid}`) — applies to prompt/greeting
-3. Builds STT/LLM/TTS providers and tool handlers from config
-4. Wires `MetricsCapture` processor and `PipelineTask` observers
+3. Reads flow execution from Redis (`flow:exec:{call_uuid}`); if absent but agent has `flow_id`, calls `/internal/flows/init-execution` to create it
+4. If flow present: overrides system_prompt/greeting from entry node config, instantiates `FlowController` + `FlowWatcherProcessor`
+5. Builds STT/LLM/TTS providers and tool handlers from config
+6. Wires `MetricsCapture` processor and `PipelineTask` observers
 
 ### Call logging (`agent/call_logger.py`)
 
@@ -205,3 +252,7 @@ Set in `.env` to your Mac's LAN IP (`ipconfig getifaddr en0`) when the softphone
 ## Key gotcha: outbound calls need a SIP trunk for real numbers
 
 The default `OUTBOUND_CHANNEL_FORMAT=PJSIP/{destination}` works for dialing registered PJSIP endpoints (e.g. `destination=softphone` rings the softphone). To dial real E.164 numbers, configure a SIP provider trunk in `pjsip.conf` and set `OUTBOUND_CHANNEL_FORMAT=PJSIP/{destination}@your-trunk`.
+
+## Key gotcha: flow_engine.py is duplicated
+
+`config-api/flow_engine.py` and `agent/flow_engine.py` are identical copies. The config-api uses it for validation on save; the agent uses it for local edge evaluation at runtime. When changing the engine logic, update **both files**.
