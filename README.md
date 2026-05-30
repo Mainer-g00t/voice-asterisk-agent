@@ -1,10 +1,11 @@
 # voice-asterisk-agent
 
-A local voice AI agent that answers phone calls via Asterisk PBX.
+A local voice AI agent that answers **and makes** phone calls via Asterisk PBX.
 
 ```
 Softphone ──SIP──▶ Asterisk (Docker) ──AudioSocket──▶ Pipecat agent (Docker)
                                                            STT → LLM → TTS
+API ────────────▶ Asterisk AMI ────────────────────▶ (same pipeline, outbound)
 ```
 
 Built with [Pipecat](https://github.com/pipecat-ai/pipecat) and a custom `AudioSocketTransport` —
@@ -36,7 +37,6 @@ cd voice-asterisk-agent
 cp .env.example .env
 # Set ASTERISK_EXTERNAL_IP to your Mac's LAN IP:  ipconfig getifaddr en0
 # Set POSTGRES_PASSWORD to a strong password
-# If softphone and Docker run on the same machine, ASTERISK_EXTERNAL_IP=127.0.0.1 is fine.
 
 # 3. Build and start all services
 make up
@@ -81,6 +81,8 @@ Each row maps a dialed number or Asterisk extension pattern to an agent slug.
 
 Each agent has a system prompt, greeting trigger, and per-provider settings (STT / LLM / TTS). Changes take effect on the next incoming call — in-flight calls finish with their original config.
 
+Prompts and greetings support **`{placeholder}` substitution** — values are injected at call time via the outbound API (see below).
+
 | Slug | What it does |
 |------|-------------|
 | `basic` | Open-ended Q&A assistant |
@@ -111,13 +113,91 @@ Agent-specific tools override global tools with the same name. All changes push 
 
 ### 📋 Calls — call history and transcripts
 
-Every completed call is logged automatically: duration, turn count, STT/LLM/TTS providers used, end reason, and the full conversation transcript. Click **Transcript** on any row to view the chat-bubble replay.
+Every completed call is logged automatically: direction (inbound 📞 / outbound 📤), duration, turn count, STT/LLM/TTS providers used, end reason, and the full conversation transcript. Click **Transcript** on any row to view the chat-bubble replay.
 
 ---
 
-## Multi-agent routing (Option A)
+## Outbound calls API
 
-Different phone numbers can route to different agents, each running in its own Docker container. All managed through the Routes UI:
+Originate a call programmatically — Asterisk dials the destination, and when answered the full STT→LLM→TTS pipeline runs exactly as for inbound calls. All logging and telemetry work identically.
+
+```bash
+POST http://localhost:8080/api/outbound/originate
+```
+
+```json
+{
+  "destination": "+15551234567",
+  "agent_slug": "sales",
+  "caller_id": "Acme Corp <+10000000000>",
+  "timeout_seconds": 30,
+  "template_vars": {
+    "name": "Luis",
+    "product": "Premium Plan"
+  }
+}
+```
+
+Returns immediately with a `call_uuid`. Poll `GET /api/calls/{call_uuid}` for status and transcript.
+
+The agent container for the requested slug is **started automatically** if not already running.
+
+### Prompt placeholders
+
+Define `{placeholder}` patterns in the agent's system prompt and greeting trigger. They are substituted at call time using `template_vars`:
+
+```
+System prompt:  "You are a sales agent for Acme. You are calling {name} about {product}."
+Greeting:       "Hello {name}, this is an automated call from Acme."
+```
+
+Unknown placeholders are left as-is (`{unknown}` → `{unknown}`), so partial substitution never crashes.
+
+### Outbound configuration
+
+| `.env` variable | Default | Description |
+|----------------|---------|-------------|
+| `AMI_SECRET` | `voiceai_ami_secret` | Asterisk AMI password |
+| `OUTBOUND_CHANNEL_FORMAT` | `PJSIP/{destination}` | Channel template. `{destination}` is replaced with the dialed number. Use `PJSIP/{destination}@trunk` for a SIP trunk. |
+
+For local testing with the softphone: `destination=softphone` rings the registered softphone directly.
+
+Full API docs: **http://localhost:8080/docs** → outbound section.
+
+---
+
+## Monitoring — Grafana + Prometheus
+
+```bash
+make grafana     # http://localhost:3000  (admin / admin or GRAFANA_PASSWORD)
+make prometheus  # http://localhost:9091
+```
+
+Each agent container exposes a Prometheus `/metrics` endpoint on port 9090. Prometheus scrapes every 10 seconds; the Grafana "Voice Agent" dashboard is pre-provisioned.
+
+**Metrics collected per call:**
+
+| Metric | Type | What it measures |
+|--------|------|-----------------|
+| `voiceai_stt_ttfb_seconds` | Histogram | STT time-to-first-byte |
+| `voiceai_llm_ttfb_seconds` | Histogram | LLM time-to-first-token |
+| `voiceai_tts_ttfb_seconds` | Histogram | TTS time-to-first-audio |
+| `voiceai_turn_e2e_seconds` | Histogram | Full user→bot round trip |
+| `voiceai_llm_tokens_total` | Counter | Prompt + completion tokens |
+| `voiceai_tts_chars_total` | Counter | TTS characters processed |
+| `voiceai_calls_active` | Gauge | Concurrent calls right now |
+| `voiceai_calls_total` | Counter | Calls by agent and end reason |
+| `voiceai_call_duration_seconds` | Histogram | Total call duration |
+
+**Dashboard panels:** p50/p95/p99 latency per stage, active calls, call rate, token/char usage over time.
+
+To add a new route-managed agent slug to Prometheus scraping, add it to `monitoring/prometheus.yml`.
+
+---
+
+## Multi-agent routing
+
+Different phone numbers route to different agents, each in its own Docker container:
 
 ```
 +1-555-1000 → agent-basic        (container: agent-basic, port 9099)
@@ -125,7 +205,7 @@ Different phone numbers can route to different agents, each running in its own D
 +1-555-3000 → agent-orchestrator (container: agent-orchestrator, port 9099)
 ```
 
-Each container uses the same pre-built image (`voice-asterisk-agent-agent`), launched automatically by the Docker SDK when you click **Apply**. Asterisk addresses them by container name on the internal `voiceai` Docker network.
+All managed through the Routes UI — click **Apply** to spin up containers and reload Asterisk.
 
 **After a code deploy** (new agent image), remove stale route-managed containers and re-apply:
 ```bash
@@ -148,10 +228,10 @@ Configured per-agent in the admin UI. Cloud API keys go in `.env`.
 | LLM | Ollama `smollm2:135m` | 11434 |
 | TTS | Piper TTS | 5001 |
 
-To switch Ollama model:
+**Note:** `smollm2:135m` does not support tool/function calling. Use `llama3.2:3b` or a cloud provider for agents with tools:
 ```bash
 docker compose exec llm ollama pull llama3.2:3b
-# then set the model in the admin UI under the agent's LLM provider
+# then set the model in admin UI → agent → LLM provider
 ```
 
 ### Cloud
@@ -173,6 +253,7 @@ Admin UI ──▶ config-api (FastAPI :8080) ──▶ Postgres (source of trut
                                         └──▶ Redis   (hot cache, TTL 300s)
                                                 ▲
                                         agent reads per-call (~1 ms)
+                                        call template vars stored here too
 ```
 
 Postgres tables: `agents`, `provider_configs`, `tool_definitions`, `specialist_configs`, `config_versions`, `phone_routes`, `call_logs`.
@@ -208,7 +289,7 @@ make shell                         # shell into agent container
 ./scripts/test-stt.sh path/to/audio.wav
 ./scripts/test-llm.sh "Who are you?"
 
-# API docs
+# API docs (includes outbound originate, call status, tool management)
 open http://localhost:8080/docs
 ```
 
@@ -216,12 +297,13 @@ open http://localhost:8080/docs
 
 ## Architecture notes
 
-- **One pipeline per call**: `server.py` creates a fresh `AudioSocketTransport` + Pipecat `PipelineTask` per TCP connection. Calls are fully isolated.
-- **Config loaded per call**: `pipeline.py` reads the agent snapshot from Redis at call start. Prompt changes take effect on the next call.
-- **Hangup handling**: a watchdog coroutine watches `reader.at_eof()`, records the hangup time, and force-cancels the pipeline after 2 s if it hasn't self-terminated (the Pipecat output transport can be slow to drain queued TTS audio into a closed socket).
-- **Call logging**: `call_logger.py` collects timestamps and the full conversation from `LLMContext.messages` after each call, then POSTs to `POST /api/calls`.
+- **One pipeline per call**: `server.py` creates a fresh `AudioSocketTransport` + Pipecat `PipelineTask` per TCP connection. Inbound and outbound calls use the same code path.
+- **Config loaded per call**: `pipeline.py` reads the agent snapshot from Redis at call start. Also reads per-call template vars (`call:vars:{uuid}`) and applies them to the prompt and greeting before the pipeline starts.
+- **Hangup handling**: a watchdog coroutine watches `reader.at_eof()`, records the hangup time, and force-cancels the pipeline after 2 s if it hasn't self-terminated.
+- **Call logging**: `call_logger.py` collects timestamps, direction, and the full conversation from `LLMContext.messages` after each call, then POSTs to `POST /api/calls`. Outbound calls are pre-created as `direction=outbound` at originate time; the agent upserts the transcript on completion.
+- **Outbound flow**: `POST /api/outbound/originate` → auto-starts agent container → stores template vars in Redis → AMI Originate → Asterisk dials → `[outbound-agent]` dialplan → AudioSocket → agent pipeline.
 - **Tool handlers stay in code**: tool *schemas* live in the DB; handlers are Python async functions registered by `handler_type` string in `agent/tool_handlers/`.
-- **Custom transport only**: no Pipecat source files modified. `AudioSocketTransport` subclasses public Pipecat base classes.
+- **Prometheus metrics**: `MetricsCapture` FrameProcessor intercepts Pipecat `MetricsFrame` objects and records TTFB/token/char metrics. Call-level counters tracked in `server.py`.
 - **Audio pacing**: output sends 20 ms chunks with `asyncio.sleep(0.020)` to prevent Asterisk's AudioSocket frame-queue overflow.
 - **VAD**: Silero VAD (PyTorch CPU) for end-of-speech detection.
-- **Asterisk NAT**: `docker-entrypoint.sh` substitutes `ASTERISK_EXTERNAL_IP` into `pjsip.conf` at startup.
+- **Asterisk NAT**: `docker-entrypoint.sh` substitutes `ASTERISK_EXTERNAL_IP` into `pjsip.conf` and `AMI_SECRET` into `manager.conf` at startup.
