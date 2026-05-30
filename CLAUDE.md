@@ -116,10 +116,21 @@ Tool **schemas** (JSON) live in the DB/Redis snapshot. Tool **handlers** (Python
 ```python
 HANDLER_REGISTRY = {
     "specialist_router": make_specialist_handler,
+    "webhook":           make_webhook_handler,
+    "transfer_call":     make_transfer_call_handler,
 }
 ```
 
-`make_specialist_handler(agent_config)` returns a closure reading specialist prompts from the config snapshot — prompts are editable in the UI without a code deploy. New `handler_type` values require a code deploy.
+Handler factories receive `(agent_config, tool_config)` — `tool_config` includes `handler_config` (handler-specific settings from the DB, e.g. webhook URL). New `handler_type` values require a code deploy; everything else (schemas, parameters, handler_config) is data-driven.
+
+**Built-in handlers:**
+- `specialist_router` — spawns a specialist subagent via Anthropic API; prompts editable in UI
+- `webhook` — HTTP POST to URL in `handler_config.url`; returns JSON response to LLM
+- `transfer_call` — stub; logs transfer request, returns confirmation to LLM (Asterisk AMI TBD)
+
+**Global tool library** (`/admin/tools`): tools defined once and assigned to multiple agents via `agent_tool_refs` table. Agent-specific tools override globals with the same name. Both appear in the Redis snapshot merged at push time.
+
+**DB tables:** `tool_definitions` (agent-specific when `agent_id` set, global when `is_global=TRUE` and `agent_id=NULL`), `agent_tool_refs` (many-to-many assignment).
 
 ### Phone routing (`phone_routes` table)
 

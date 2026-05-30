@@ -67,7 +67,7 @@ Dial any number — the dialplan routes calls based on the **Phone Routes** tabl
 
 ## Admin UI — http://localhost:8080/admin
 
-Three sections, all editable live with no restarts:
+Four sections, all editable live with no restarts:
 
 ### 📞 Routes — phone number → agent mapping
 
@@ -88,6 +88,26 @@ Each agent has a system prompt, greeting trigger, and per-provider settings (STT
 | `storyteller` | Collaborative story builder |
 | `language_tutor` | English conversation practice |
 | `orchestrator` | Hotel concierge — delegates to specialist subagents via tool calling (requires Anthropic) |
+
+### 🔧 Tools — global tool library
+
+Define tools once in the global library and assign them to any agent, or add agent-specific tools directly in the agent edit page.
+
+Each tool has:
+- **Name** — snake_case identifier the LLM calls (e.g. `get_weather`)
+- **Handler type** — which Python handler runs when the LLM calls the tool
+- **Parameters** — structured form builder: per-parameter name, type, description, enum values, required flag
+- **Handler config** — handler-specific settings (e.g. webhook URL and timeout)
+
+Available handler types:
+
+| Handler | What it does |
+|---------|-------------|
+| `specialist_router` | Delegates to a specialist subagent (prompts configurable per-agent in Specialists section) |
+| `webhook` | HTTP POST to a configurable URL; returns the JSON response to the LLM |
+| `transfer_call` | Initiates a call transfer (stub — Asterisk AMI integration TBD) |
+
+Agent-specific tools override global tools with the same name. All changes push to Redis immediately.
 
 ### 📋 Calls — call history and transcripts
 
