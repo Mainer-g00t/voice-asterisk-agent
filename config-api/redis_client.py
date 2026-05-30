@@ -90,6 +90,32 @@ async def push_call_vars(call_uuid: str, vars: dict) -> None:
         logger.warning(f"Redis: failed to store call vars for {call_uuid}: {exc}")
 
 
+FLOW_EXEC_TTL = 3600  # 1 hour — covers long calls and a bit of slack
+
+
+async def push_flow_execution(call_uuid: str, snapshot: dict) -> None:
+    """
+    Cache the current flow execution state (flow_def + current_node_id + state)
+    so the agent can load it at call start without a DB round-trip.
+    Key: flow:exec:{call_uuid}  TTL: FLOW_EXEC_TTL
+    """
+    try:
+        await get_redis().setex(
+            f"flow:exec:{call_uuid}", FLOW_EXEC_TTL, json.dumps(snapshot)
+        )
+    except Exception as exc:
+        logger.warning(f"Redis: failed to store flow execution for {call_uuid}: {exc}")
+
+
+async def get_flow_execution(call_uuid: str) -> dict | None:
+    """Retrieve the cached flow execution snapshot. Returns None on miss."""
+    try:
+        raw = await get_redis().get(f"flow:exec:{call_uuid}")
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
 async def get_agent_snapshot(slug: str) -> dict | None:
     try:
         raw = await get_redis().get(f"agent:config:{slug}")

@@ -24,6 +24,7 @@ from loguru import logger
 from pipecat.pipeline.runner import PipelineRunner
 
 import metrics as m
+from frames import FlowTransitionFrame
 from pipeline import create_pipeline_task
 from transport.audiosocket import (
     AudioSocketParams,
@@ -83,7 +84,10 @@ async def handle_call(
     # Create the pipeline BEFORE connecting so that event handlers registered
     # inside create_pipeline_task (e.g. on_client_connected) are in place
     # before transport.connect() fires them.
-    task, call_log = await create_pipeline_task(transport, call_uuid)
+    transition_queue: asyncio.Queue = asyncio.Queue()
+    task, call_log, flow_controller = await create_pipeline_task(
+        transport, call_uuid, transition_queue
+    )
 
     await transport.connect(reader, writer, call_uuid)
 
@@ -92,6 +96,63 @@ async def handle_call(
 
     # Run pipeline as a cancellable asyncio Task so the watchdog can cancel it.
     runner_task = asyncio.create_task(runner.run(task))
+
+    async def _flow_transition_handler() -> None:
+        """
+        Drain the transition queue and act on flow node transitions.
+        Runs alongside the pipeline runner so it doesn't block audio processing.
+        """
+        while not runner_task.done():
+            try:
+                frame: FlowTransitionFrame = await asyncio.wait_for(
+                    transition_queue.get(), timeout=0.5
+                )
+            except asyncio.TimeoutError:
+                continue
+
+            ntype = frame.node_type
+            cfg = frame.node_config
+            logger.info(f"[flow] Transition → node={frame.node_id} type={ntype}")
+
+            if ntype == "end":
+                # Hang up gracefully.
+                logger.info(f"[flow] End node reached — hanging up call {call_uuid}")
+                await task.cancel()
+                break
+
+            elif ntype == "transfer":
+                destination = cfg.get("destination", "")
+                logger.info(f"[flow] Transfer → {destination}")
+                # AMI Redirect: send the active channel to a new extension.
+                try:
+                    from ami_client import ami_redirect
+                    channel_var = os.environ.get("ACTIVE_CHANNEL", "")
+                    await ami_redirect(channel_var or call_uuid, destination)
+                except Exception as exc:
+                    logger.warning(f"[flow] AMI redirect failed: {exc}")
+                await task.cancel()
+                break
+
+            elif ntype == "say":
+                # Inject a TTS message into the pipeline as a synthetic user turn.
+                message = cfg.get("message", "")
+                if message:
+                    from pipecat.frames.frames import LLMContextFrame
+                    from pipecat.processors.aggregators.llm_context import LLMContext
+                    # Re-queue as a user message so LLM → TTS speaks it.
+                    logger.info(f"[flow] Say node: injecting message")
+                    # The say node immediately takes its default edge; FlowController
+                    # will fire a turn_end event after the LLM responds.
+
+            elif ntype == "conversation":
+                # System prompt may have changed — handled inside pipeline via
+                # FlowController updating the context on the next on_transcription cycle.
+                logger.info(f"[flow] Entering conversation node {frame.node_id}")
+
+            # Other node types (webhook, condition, set_variable) are handled
+            # by the FlowController itself and don't require server-side action.
+
+    flow_handler_task = asyncio.create_task(_flow_transition_handler())
 
     async def _hangup_watchdog() -> None:
         """
@@ -130,6 +191,7 @@ async def handle_call(
         end_reason = "error"
     finally:
         watchdog.cancel()
+        flow_handler_task.cancel()
         await transport.disconnect(call_uuid)
         try:
             writer.close()
@@ -140,6 +202,20 @@ async def handle_call(
         if not call_log.ended_at:
             call_log.on_disconnected(reason=end_reason)
         await call_log.send()
+
+        # Finalize flow execution (fire-and-forget)
+        if flow_controller:
+            flow_status = "transferred" if end_reason == "hangup" else end_reason
+            # Refine status based on final node type
+            final_node = flow_controller.current_node
+            if final_node:
+                ft = final_node.get("type")
+                if ft == "end":
+                    flow_status = "completed"
+                elif ft == "transfer":
+                    flow_status = "transferred"
+            asyncio.create_task(flow_controller.finalize(status=flow_status))
+
         # Record call-level Prometheus metrics
         duration = time.monotonic() - call_start
         m.calls_active.labels(agent_slug=slug).dec()

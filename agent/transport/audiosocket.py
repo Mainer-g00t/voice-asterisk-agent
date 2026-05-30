@@ -29,6 +29,14 @@ from pipecat.transports.base_input import BaseInputTransport
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 
+# Lazy import to avoid circular dependency (frames imports nothing from transport)
+def _get_dtmf_frame_class():
+    try:
+        from frames import DTMFInputFrame
+        return DTMFInputFrame
+    except ImportError:
+        return None
+
 # ── Protocol constants ────────────────────────────────────────────────────────
 
 MSG_HANGUP = 0x00
@@ -116,8 +124,12 @@ class AudioSocketInputTransport(BaseInputTransport):
                     continue
 
                 elif msg_type == MSG_DTMF:
-                    digit = payload.decode("ascii", errors="ignore")
-                    logger.debug(f"DTMF digit: {digit!r} (call {self._call_uuid})")
+                    digit = payload.decode("ascii", errors="ignore").strip()
+                    logger.info(f"DTMF digit: {digit!r} (call {self._call_uuid})")
+                    # Emit a DTMFInputFrame so FlowWatcherProcessor can react
+                    DTMFInputFrame = _get_dtmf_frame_class()
+                    if DTMFInputFrame and digit:
+                        await self.push_frame(DTMFInputFrame(digit=digit))
 
                 elif msg_type == MSG_AUDIO:
                     audio_frames_received += 1

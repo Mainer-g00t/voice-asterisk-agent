@@ -25,6 +25,7 @@ import ami_client
 import db
 import docker_manager
 import redis_client
+from flow_engine import get_entry_node
 
 router = APIRouter()
 
@@ -44,6 +45,7 @@ class OriginateRequest(BaseModel):
     template_vars: dict[str, str] = {}    # substituted into {placeholders} in prompt and greeting
     metadata: dict[str, Any] = {}         # passed through to the CDR callback payload
     callback_url: str | None = None       # POSTed with the full CDR when the call ends
+    flow_id: str | None = None            # optional flow to run for this call
 
 
 @router.post("/originate", status_code=202)
@@ -76,6 +78,30 @@ async def originate_call(body: OriginateRequest):
     # Store template vars in Redis so the agent can substitute them into the prompt/greeting.
     if body.template_vars:
         await redis_client.push_call_vars(call_uuid, body.template_vars)
+
+    # If a flow is specified, pre-create the execution and cache it in Redis.
+    if body.flow_id:
+        try:
+            flow = await db.get_flow(body.flow_id)
+            if not flow:
+                raise HTTPException(status_code=404, detail=f"Flow '{body.flow_id}' not found or inactive")
+            entry_node = get_entry_node(flow["definition"])
+            entry_node_id = entry_node["id"] if entry_node else None
+            exec_id = await db.create_flow_execution(body.flow_id, call_uuid, entry_node_id or "")
+            # Cache the full snapshot so the agent can load it instantly
+            await redis_client.push_flow_execution(call_uuid, {
+                "execution_id": exec_id,
+                "flow_id": body.flow_id,
+                "flow_def": flow["definition"],
+                "current_node_id": entry_node_id,
+                "state": {},
+            })
+            logger.info(f"Flow execution created: flow={body.flow_id} exec={exec_id} call={call_uuid}")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning(f"Failed to create flow execution for call {call_uuid}: {exc}")
+            # Non-fatal: call proceeds without flow
 
     # Store call meta (callback_url, metadata) for retrieval when the call ends.
     if body.callback_url or body.metadata:

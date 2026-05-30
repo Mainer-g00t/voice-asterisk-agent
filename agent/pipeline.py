@@ -20,7 +20,7 @@ from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import LLMContextFrame, MetricsFrame
+from pipecat.frames.frames import LLMContextFrame, LLMFullResponseEndFrame, MetricsFrame
 from pipecat.metrics.metrics import (
     LLMUsageMetricsData,
     ProcessingMetricsData,
@@ -38,6 +38,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 import metrics as m
 from call_logger import CallLogger
+from flow_controller import FlowController, FlowWatcherProcessor
 from transport.audiosocket import AGENT_SAMPLE_RATE, AudioSocketParams, AudioSocketTransport
 
 # ── Redis client (shared across calls) ───────────────────────────────────────
@@ -58,6 +59,20 @@ def _get_redis() -> aioredis.Redis:
 
 
 # ── Config loading ────────────────────────────────────────────────────────────
+
+async def _load_flow_execution(call_uuid: str) -> dict | None:
+    """
+    Fetch the pre-created flow execution snapshot from Redis.
+    Returns None if this call has no flow assigned.
+    """
+    try:
+        raw = await _get_redis().get(f"flow:exec:{call_uuid}")
+        if raw:
+            return json.loads(raw)
+    except Exception as e:
+        logger.warning(f"Could not load flow execution for {call_uuid}: {e}")
+    return None
+
 
 async def _load_call_vars(call_uuid: str) -> dict:
     """Fetch per-call template variables stored by the originate API, if any."""
@@ -290,14 +305,52 @@ class MetricsCapture(FrameProcessor):
 # ── Pipeline factory ──────────────────────────────────────────────────────────
 
 async def create_pipeline_task(
-    transport: AudioSocketTransport, call_uuid: str
-) -> tuple[PipelineTask, CallLogger]:
+    transport: AudioSocketTransport,
+    call_uuid: str,
+    transition_queue: "asyncio.Queue | None" = None,
+) -> tuple["PipelineTask", "CallLogger", "FlowController | None"]:
+    import asyncio as _asyncio
+
     slug = os.environ.get("AGENT_SLUG", "basic")
     config = await _load_agent_config(slug)
     call_vars = await _load_call_vars(call_uuid)
     if call_vars:
         logger.info(f"Applying template vars for call {call_uuid}: {list(call_vars.keys())}")
         config = _apply_template_vars(config, call_vars)
+
+    # ── Flow execution (optional) ─────────────────────────────────────────────
+    flow_exec = await _load_flow_execution(call_uuid)
+    flow_controller: FlowController | None = None
+
+    if flow_exec and flow_exec.get("flow_def"):
+        flow_def = flow_exec["flow_def"]
+        entry_node_id = flow_exec.get("current_node_id") or ""
+        from flow_engine import get_node as _get_node
+        entry_node = _get_node(flow_def, entry_node_id) or {}
+        node_cfg = entry_node.get("config", {})
+
+        # Node config can override agent's system_prompt and greeting
+        if node_cfg.get("system_prompt"):
+            config = dict(config)
+            config["system_prompt"] = node_cfg["system_prompt"]
+        if node_cfg.get("greeting"):
+            config = dict(config)
+            config["greeting_trigger"] = node_cfg["greeting"]
+
+        if transition_queue is None:
+            transition_queue = _asyncio.Queue()
+
+        flow_controller = FlowController(
+            flow_def=flow_def,
+            call_uuid=call_uuid,
+            execution_id=flow_exec.get("execution_id", ""),
+            entry_node_id=entry_node_id,
+            transition_queue=transition_queue,
+        )
+        logger.info(
+            f"Flow active for call {call_uuid}: "
+            f"flow={flow_exec.get('flow_id')} entry={entry_node_id}"
+        )
 
     system_prompt = config["system_prompt"]
     greeting_trigger = config.get("greeting_trigger", "Hello")
@@ -338,18 +391,20 @@ async def create_pipeline_task(
 
     metrics_capture = MetricsCapture(agent_slug=slug, providers=providers)
 
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            stt,
-            aggregators.user(),
-            llm,
-            tts,
-            metrics_capture,
-            transport.output(),
-            aggregators.assistant(),
-        ]
-    )
+    # Build the stage list; insert FlowWatcherProcessor if a flow is active.
+    stages: list = [transport.input(), stt]
+    if flow_controller:
+        stages.append(FlowWatcherProcessor(controller=flow_controller))
+    stages += [
+        aggregators.user(),
+        llm,
+        tts,
+        metrics_capture,
+        transport.output(),
+        aggregators.assistant(),
+    ]
+
+    pipeline = Pipeline(stages)
 
     task = PipelineTask(
         pipeline,
@@ -376,4 +431,4 @@ async def create_pipeline_task(
         call_log.on_disconnected(reason="hangup")
         await task.cancel()
 
-    return task, call_log
+    return task, call_log, flow_controller

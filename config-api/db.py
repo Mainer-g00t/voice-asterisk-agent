@@ -129,7 +129,7 @@ async def build_snapshot(slug: str) -> dict[str, Any] | None:
         for r in specialists_rows
     }
 
-    return {
+    snapshot = {
         "slug": agent["slug"],
         "display_name": agent["display_name"],
         "system_prompt": agent["system_prompt"],
@@ -138,6 +138,10 @@ async def build_snapshot(slug: str) -> dict[str, Any] | None:
         "tools": tools,
         "specialists": specialists,
     }
+    # Include flow_id if one is attached to the agent
+    if agent.get("flow_id"):
+        snapshot["flow_id"] = str(agent["flow_id"])
+    return snapshot
 
 
 # ── agent CRUD helpers ────────────────────────────────────────────────────────
@@ -231,6 +235,42 @@ async def list_global_tools() -> list[dict]:
         result.append(d)
     return result
 
+
+# ── flow helpers ─────────────────────────────────────────────────────────────
+
+async def get_flow(flow_id: str) -> dict | None:
+    """Fetch flow definition from Postgres. Returns None if not found / inactive."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, name, definition FROM flows WHERE id=$1::uuid AND is_active=true",
+            flow_id,
+        )
+    if not row:
+        return None
+    d = dict(row)
+    defn = d.get("definition")
+    if isinstance(defn, str):
+        d["definition"] = json.loads(defn)
+    elif hasattr(defn, "keys"):
+        d["definition"] = dict(defn)
+    return d
+
+
+async def create_flow_execution(flow_id: str, call_uuid: str, entry_node_id: str) -> str:
+    """Insert a new flow_executions row. Returns the execution UUID as a string."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO flow_executions (flow_id, call_uuid, current_node_id, status)
+               VALUES ($1::uuid, $2, $3, 'running')
+               RETURNING id""",
+            flow_id, call_uuid, entry_node_id,
+        )
+    return str(row["id"])
+
+
+# ── version helpers ───────────────────────────────────────────────────────────
 
 async def get_version_snapshot(agent_id: str, version_id: str) -> dict | None:
     pool = get_pool()
