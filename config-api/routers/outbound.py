@@ -18,10 +18,12 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from loguru import logger
 from pydantic import BaseModel
 
 import ami_client
 import db
+import docker_manager
 
 router = APIRouter()
 
@@ -67,6 +69,18 @@ async def originate_call(body: OriginateRequest):
                ON CONFLICT (call_uuid) DO NOTHING""",
             call_uuid, body.agent_slug, body.destination,
         )
+
+    # Ensure the agent container is running before Asterisk tries to connect.
+    try:
+        status = docker_manager.ensure_agent_running(body.agent_slug)
+        logger.info(f"Agent container for '{body.agent_slug}': {status}")
+    except Exception as exc:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE call_logs SET end_reason='agent_start_failed' WHERE call_uuid=$1",
+                call_uuid,
+            )
+        raise HTTPException(status_code=503, detail=f"Could not start agent container: {exc}")
 
     # Originate via AMI (non-blocking — Asterisk dials asynchronously).
     try:
