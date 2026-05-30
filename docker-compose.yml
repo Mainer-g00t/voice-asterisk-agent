@@ -127,6 +127,18 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # ── Example webhook tools server ─────────────────────────────────────────────
+  # Reachable inside the voiceai network as http://tools-server:8100
+  # Add new tool endpoints to tools-server/main.py and restart this service.
+
+  tools-server:
+    build: ./tools-server
+    container_name: tools-server
+    ports:
+      - "8100:8100"
+    networks: [voiceai]
+    restart: unless-stopped
+
   # ── Monitoring ───────────────────────────────────────────────────────────────
 
   prometheus:
