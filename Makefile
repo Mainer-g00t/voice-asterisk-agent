@@ -1,4 +1,4 @@
-.PHONY: pull up down logs logs-agent logs-tts logs-llm logs-stt logs-asterisk restart cli shell migrate
+.PHONY: pull up down logs logs-agent logs-tts logs-llm logs-stt logs-asterisk restart cli shell migrate grafana prometheus
 
 # Pull latest code + updated base images
 pull:
@@ -44,6 +44,13 @@ cli:
 # Open a shell inside the agent container
 shell:
 	docker compose exec agent /bin/bash
+
+# Open Grafana and Prometheus in the browser
+grafana:
+	open http://localhost:3000
+
+prometheus:
+	open http://localhost:9091
 
 # Apply all pending SQL migrations to the running Postgres container
 # Usage: make migrate  (safe to run multiple times — Postgres ignores IF NOT EXISTS)

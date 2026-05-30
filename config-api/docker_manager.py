@@ -35,6 +35,7 @@ def _agent_env(slug: str) -> dict:
         "AGENT_SLUG": slug,
         "AUDIOSOCKET_HOST": "0.0.0.0",
         "AUDIOSOCKET_PORT": "9099",
+        "METRICS_PORT": "9090",
         "REDIS_URL": os.environ.get("REDIS_URL", "redis://redis:6379/0"),
         "CONFIG_API_URL": os.environ.get("CONFIG_API_URL", "http://config-api:8080"),
         "LOGURU_LEVEL": os.environ.get("LOGURU_LEVEL", "INFO"),

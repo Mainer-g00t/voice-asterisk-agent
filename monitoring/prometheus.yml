@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  # Default fallback agent (always running via docker-compose)
+  - job_name: voice_agent_default
+    static_configs:
+      - targets:
+          - agent:9090
+        labels:
+          container: agent
+
+  # Route-managed agent containers started via the Admin UI Apply button.
+  # Add new slugs here when you create new routes.
+  # Containers that are not running appear as "down" in Prometheus — that is expected.
+  - job_name: voice_agent_routes
+    static_configs:
+      - targets:
+          - agent-basic:9090
+          - agent-sales:9090
+          - agent-orchestrator:9090
+          - agent-customer_service:9090
+          - agent-storyteller:9090
+          - agent-language_tutor:9090

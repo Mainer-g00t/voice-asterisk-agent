@@ -110,6 +110,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CONFIG_API_URL: http://config-api:8080
       AGENT_SLUG: ${AGENT_SLUG:-basic}
+      METRICS_PORT: "9090"
     networks: [voiceai]
     depends_on:
       postgres:
@@ -124,6 +125,37 @@ services:
         condition: service_started
       tts:
         condition: service_started
+    restart: unless-stopped
+
+  # ── Monitoring ───────────────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9091:9090"
+    networks: [voiceai]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    networks: [voiceai]
+    depends_on: [prometheus]
     restart: unless-stopped
 
   # ── Asterisk PBX ──────────────────────────────────────────────────────────────
@@ -156,3 +188,5 @@ volumes:
   ollama_data:
   postgres_data:
   redis_data:
+  prometheus_data:
+  grafana_data:

@@ -20,7 +20,13 @@ from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import LLMContextFrame
+from pipecat.frames.frames import LLMContextFrame, MetricsFrame
+from pipecat.metrics.metrics import (
+    LLMUsageMetricsData,
+    ProcessingMetricsData,
+    TTFBMetricsData,
+    TTSUsageMetricsData,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -28,7 +34,9 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+import metrics as m
 from call_logger import CallLogger
 from transport.audiosocket import AGENT_SAMPLE_RATE, AudioSocketParams, AudioSocketTransport
 
@@ -186,6 +194,70 @@ def _register_tools(llm, tool_configs: list[dict], agent_config: dict) -> None:
         logger.info(f"Registered tool '{tool_name}' (handler_type={handler_type!r})")
 
 
+# ── Prometheus metrics capture ────────────────────────────────────────────────
+
+class MetricsCapture(FrameProcessor):
+    """
+    Intercepts MetricsFrame objects flowing through the pipeline and records
+    TTFB, token usage, and TTS character counts into Prometheus metrics.
+
+    Inserted after TTS in the pipeline so all service frames pass through it.
+    The frame is always forwarded unchanged — this processor is purely observational.
+    """
+
+    def __init__(self, agent_slug: str, providers: dict) -> None:
+        super().__init__()
+        self._slug = agent_slug
+        self._stt_provider = providers.get("stt", {}).get("name", "local")
+        self._llm_provider = providers.get("llm", {}).get("name", "local")
+        self._llm_model = providers.get("llm", {}).get("model") or "default"
+        self._tts_provider = providers.get("tts", {}).get("name", "local")
+
+    async def process_frame(self, frame: object, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, MetricsFrame):
+            for metric in frame.data:
+                try:
+                    if isinstance(metric, TTFBMetricsData):
+                        processor = metric.processor.lower() if metric.processor else ""
+                        value = metric.value  # seconds
+                        if "stt" in processor or "whisper" in processor:
+                            m.stt_ttfb.labels(
+                                agent_slug=self._slug, provider=self._stt_provider
+                            ).observe(value)
+                        elif "llm" in processor or "ollama" in processor or "anthropic" in processor or "openai" in processor:
+                            m.llm_ttfb.labels(
+                                agent_slug=self._slug,
+                                provider=self._llm_provider,
+                                model=self._llm_model,
+                            ).observe(value)
+                        elif "tts" in processor or "piper" in processor or "cartesia" in processor:
+                            m.tts_ttfb.labels(
+                                agent_slug=self._slug, provider=self._tts_provider
+                            ).observe(value)
+
+                    elif isinstance(metric, LLMUsageMetricsData):
+                        usage = metric.value
+                        if hasattr(usage, "prompt_tokens") and usage.prompt_tokens:
+                            m.llm_tokens_total.labels(
+                                agent_slug=self._slug, token_type="prompt"
+                            ).inc(usage.prompt_tokens)
+                        if hasattr(usage, "completion_tokens") and usage.completion_tokens:
+                            m.llm_tokens_total.labels(
+                                agent_slug=self._slug, token_type="completion"
+                            ).inc(usage.completion_tokens)
+
+                    elif isinstance(metric, TTSUsageMetricsData):
+                        if metric.value:
+                            m.tts_chars_total.labels(agent_slug=self._slug).inc(metric.value)
+
+                except Exception as exc:
+                    logger.warning(f"MetricsCapture error processing {type(metric).__name__}: {exc}")
+
+        await self.push_frame(frame, direction)
+
+
 # ── Pipeline factory ──────────────────────────────────────────────────────────
 
 async def create_pipeline_task(
@@ -231,6 +303,8 @@ async def create_pipeline_task(
         user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
     )
 
+    metrics_capture = MetricsCapture(agent_slug=slug, providers=providers)
+
     pipeline = Pipeline(
         [
             transport.input(),
@@ -238,6 +312,7 @@ async def create_pipeline_task(
             aggregators.user(),
             llm,
             tts,
+            metrics_capture,
             transport.output(),
             aggregators.assistant(),
         ]
@@ -247,6 +322,7 @@ async def create_pipeline_task(
         pipeline,
         params=PipelineParams(
             enable_metrics=True,
+            enable_usage_metrics=True,
             audio_in_sample_rate=AGENT_SAMPLE_RATE,
             audio_out_sample_rate=AGENT_SAMPLE_RATE,
         ),

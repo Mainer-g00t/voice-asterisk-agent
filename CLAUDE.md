@@ -17,7 +17,7 @@ Admin UI (browser) ──▶ config-api ──▶ Postgres (source of truth)
                                    └──▶ Redis  (hot cache, per-call read)
 ```
 
-Services: `postgres`, `redis`, `config-api`, `stt`, `llm`, `tts`, `agent` (fallback), `asterisk` in `docker-compose.yml`. Route-managed agent containers (`agent-{slug}`) are started dynamically via the Docker SDK.
+Services: `postgres`, `redis`, `config-api`, `stt`, `llm`, `tts`, `agent` (fallback), `asterisk`, `prometheus`, `grafana` in `docker-compose.yml`. Route-managed agent containers (`agent-{slug}`) are started dynamically via the Docker SDK.
 
 ## Common commands
 
@@ -30,6 +30,8 @@ make logs          # stream logs from all services
 make logs-agent    # stream logs from a single service (also: logs-tts, logs-llm, logs-stt, logs-asterisk)
 make cli           # open Asterisk CLI (use `pjsip show endpoints` to verify softphone registration)
 make shell         # shell into the agent container
+make grafana       # open Grafana dashboard (http://localhost:3000)
+make prometheus    # open Prometheus UI (http://localhost:9091)
 
 # After a code deploy, rebuild and restart route-managed containers:
 docker compose build agent
@@ -60,6 +62,24 @@ Agent configuration (prompts, provider selection, tool schemas, specialist promp
 - `agents`, `provider_configs`, `tool_definitions`, `specialist_configs`, `config_versions` — agent config
 - `phone_routes` — DID → agent_slug routing
 - `call_logs` — per-call metadata and transcript
+
+### Prometheus + Grafana monitoring
+
+Each agent container (default `agent` + route-managed `agent-{slug}`) runs a Prometheus metrics HTTP server on port **9090** (background thread, started in `server.py main()`). Prometheus scrapes all targets every 10 seconds. Grafana auto-provisions the datasource and dashboard at startup.
+
+**Metrics exposed** (`agent/metrics.py`):
+- `voiceai_stt_ttfb_seconds` / `voiceai_llm_ttfb_seconds` / `voiceai_tts_ttfb_seconds` — per-stage TTFB histograms
+- `voiceai_llm_tokens_total` — prompt + completion token counters
+- `voiceai_tts_chars_total` — TTS character counter
+- `voiceai_calls_active` — concurrent call gauge
+- `voiceai_calls_total` — call counter by end_reason
+- `voiceai_call_duration_seconds` — call duration histogram
+
+**Capture path**: `MetricsCapture` (a `FrameProcessor` in `agent/pipeline.py`) intercepts `MetricsFrame` objects emitted by Pipecat (`enable_metrics=True`, `enable_usage_metrics=True`) and calls the corresponding Prometheus metric objects.
+
+**Scrape config**: `monitoring/prometheus.yml` — add new agent slugs there when adding routes.
+
+**Grafana password**: set `GRAFANA_PASSWORD` in `.env` (defaults to `admin`).
 
 ### AudioSocket transport (`agent/transport/audiosocket.py`)
 

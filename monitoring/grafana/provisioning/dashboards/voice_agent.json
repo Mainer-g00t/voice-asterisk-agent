@@ -1,0 +1,207 @@
+{
+  "__inputs": [],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
+  ],
+  "annotations": { "list": [] },
+  "description": "Voice AI Agent — pipeline latency, token usage, and call metrics",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Call Overview",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] }, "unit": "none" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Active Calls",
+      "type": "stat",
+      "targets": [{ "datasource": "Prometheus", "expr": "sum(voiceai_calls_active)", "legendFormat": "active" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "id": 2,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Calls / min",
+      "type": "stat",
+      "targets": [{ "datasource": "Prometheus", "expr": "sum(rate(voiceai_calls_total[1m])) * 60", "legendFormat": "calls/min" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "id": 3,
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "Median Call Duration",
+      "type": "stat",
+      "targets": [{ "datasource": "Prometheus", "expr": "histogram_quantile(0.5, sum(rate(voiceai_call_duration_seconds_bucket[10m])) by (le))", "legendFormat": "p50" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "id": 4,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "LLM Tokens / min",
+      "type": "stat",
+      "targets": [{ "datasource": "Prometheus", "expr": "sum(rate(voiceai_llm_tokens_total[1m])) * 60", "legendFormat": "tokens/min" }]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "id": 5,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "title": "TTS Chars / min",
+      "type": "stat",
+      "targets": [{ "datasource": "Prometheus", "expr": "sum(rate(voiceai_tts_chars_total[1m])) * 60", "legendFormat": "chars/min" }]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "title": "Pipeline Latency (TTFB)",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 2 }, "unit": "s" },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 6 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "title": "STT TTFB — p50 / p95 / p99",
+      "type": "timeseries",
+      "targets": [
+        { "datasource": "Prometheus", "expr": "histogram_quantile(0.5,  sum(rate(voiceai_stt_ttfb_seconds_bucket[5m])) by (le, agent_slug))", "legendFormat": "p50 {{agent_slug}}" },
+        { "datasource": "Prometheus", "expr": "histogram_quantile(0.95, sum(rate(voiceai_stt_ttfb_seconds_bucket[5m])) by (le, agent_slug))", "legendFormat": "p95 {{agent_slug}}" },
+        { "datasource": "Prometheus", "expr": "histogram_quantile(0.99, sum(rate(voiceai_stt_ttfb_seconds_bucket[5m])) by (le, agent_slug))", "legendFormat": "p99 {{agent_slug}}" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 2 }, "unit": "s" },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 6 },
+      "id": 11,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "title": "LLM TTFT — p50 / p95 / p99",
+      "type": "timeseries",
+      "targets": [
+        { "datasource": "Prometheus", "expr": "histogram_quantile(0.5,  sum(rate(voiceai_llm_ttfb_seconds_bucket[5m])) by (le, agent_slug, provider))", "legendFormat": "p50 {{agent_slug}} / {{provider}}" },
+        { "datasource": "Prometheus", "expr": "histogram_quantile(0.95, sum(rate(voiceai_llm_ttfb_seconds_bucket[5m])) by (le, agent_slug, provider))", "legendFormat": "p95 {{agent_slug}} / {{provider}}" },
+        { "datasource": "Prometheus", "expr": "histogram_quantile(0.99, sum(rate(voiceai_llm_ttfb_seconds_bucket[5m])) by (le, agent_slug, provider))", "legendFormat": "p99 {{agent_slug}} / {{provider}}" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 2 }, "unit": "s" },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 6 },
+      "id": 12,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "title": "TTS TTFB — p50 / p95 / p99",
+      "type": "timeseries",
+      "targets": [
+        { "datasource": "Prometheus", "expr": "histogram_quantile(0.5,  sum(rate(voiceai_tts_ttfb_seconds_bucket[5m])) by (le, agent_slug))", "legendFormat": "p50 {{agent_slug}}" },
+        { "datasource": "Prometheus", "expr": "histogram_quantile(0.95, sum(rate(voiceai_tts_ttfb_seconds_bucket[5m])) by (le, agent_slug))", "legendFormat": "p95 {{agent_slug}}" },
+        { "datasource": "Prometheus", "expr": "histogram_quantile(0.99, sum(rate(voiceai_tts_ttfb_seconds_bucket[5m])) by (le, agent_slug))", "legendFormat": "p99 {{agent_slug}}" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 102,
+      "title": "Token & Character Usage",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "custom": { "lineWidth": 2 }, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "id": 20,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "title": "LLM Token Rate (tokens/min)",
+      "type": "timeseries",
+      "targets": [
+        { "datasource": "Prometheus", "expr": "sum(rate(voiceai_llm_tokens_total[1m])) by (agent_slug, token_type) * 60", "legendFormat": "{{agent_slug}} {{token_type}}" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "custom": { "lineWidth": 2 }, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "id": 21,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "title": "TTS Character Rate (chars/min)",
+      "type": "timeseries",
+      "targets": [
+        { "datasource": "Prometheus", "expr": "sum(rate(voiceai_tts_chars_total[1m])) by (agent_slug) * 60", "legendFormat": "{{agent_slug}}" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "id": 103,
+      "title": "Call Volume & Duration",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "custom": { "lineWidth": 2 }, "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 30,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "title": "Call Rate by Agent & End Reason",
+      "type": "timeseries",
+      "targets": [
+        { "datasource": "Prometheus", "expr": "sum(rate(voiceai_calls_total[5m])) by (agent_slug, end_reason) * 60", "legendFormat": "{{agent_slug}} / {{end_reason}}" }
+      ]
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "custom": { "lineWidth": 2 }, "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 31,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "title": "Call Duration — p50 / p95",
+      "type": "timeseries",
+      "targets": [
+        { "datasource": "Prometheus", "expr": "histogram_quantile(0.5,  sum(rate(voiceai_call_duration_seconds_bucket[10m])) by (le, agent_slug))", "legendFormat": "p50 {{agent_slug}}" },
+        { "datasource": "Prometheus", "expr": "histogram_quantile(0.95, sum(rate(voiceai_call_duration_seconds_bucket[10m])) by (le, agent_slug))", "legendFormat": "p95 {{agent_slug}}" }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "tags": ["voice", "ai", "pipecat", "asterisk"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Voice Agent",
+  "uid": "voice-agent-v1",
+  "version": 1
+}

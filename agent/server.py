@@ -16,12 +16,14 @@ Call teardown:
 
 import asyncio
 import os
+import time
 import uuid
 
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.pipeline.runner import PipelineRunner
 
+import metrics as m
 from pipeline import create_pipeline_task
 from transport.audiosocket import (
     AudioSocketParams,
@@ -35,6 +37,7 @@ load_dotenv()
 
 HOST = os.environ.get("AUDIOSOCKET_HOST", "0.0.0.0")
 PORT = int(os.environ.get("AUDIOSOCKET_PORT", "9099"))
+METRICS_PORT = int(os.environ.get("METRICS_PORT", "9090"))
 
 # Seconds to wait for pipeline to drain gracefully after hangup before force-cancelling
 HANGUP_DRAIN_TIMEOUT = float(os.environ.get("HANGUP_DRAIN_TIMEOUT", "2.0"))
@@ -46,6 +49,9 @@ async def handle_call(
 ) -> None:
     peer = writer.get_extra_info("peername")
     logger.info(f"New AudioSocket connection from {peer}")
+    slug = os.environ.get("AGENT_SLUG", "basic")
+    call_start = time.monotonic()
+    m.calls_active.labels(agent_slug=slug).inc()
 
     # Asterisk always sends a UUID frame as the very first message.
     try:
@@ -134,9 +140,16 @@ async def handle_call(
         if not call_log.ended_at:
             call_log.on_disconnected(reason=end_reason)
         await call_log.send()
+        # Record call-level Prometheus metrics
+        duration = time.monotonic() - call_start
+        m.calls_active.labels(agent_slug=slug).dec()
+        m.calls_total.labels(agent_slug=slug, end_reason=end_reason).inc()
+        m.call_duration.labels(agent_slug=slug).observe(duration)
 
 
 async def main() -> None:
+    m.start_metrics_server(port=METRICS_PORT)
+    logger.info(f"Prometheus metrics server started on :{METRICS_PORT}")
     server = await asyncio.start_server(handle_call, HOST, PORT)
     addr = server.sockets[0].getsockname()
     logger.info(f"AudioSocket server listening on {addr[0]}:{addr[1]}")
