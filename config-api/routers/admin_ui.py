@@ -104,21 +104,59 @@ async def delete_route(request: Request, route_id: str):
 # ── Call history UI ───────────────────────────────────────────────────────────
 
 @router.get("/calls", response_class=HTMLResponse)
-async def calls_list(request: Request):
-    import json as _json
+async def calls_list(
+    request: Request,
+    page: int = 1,
+    agent: str = "",
+    direction: str = "",
+):
+    page_size = 50
+    page = max(1, page)
+    offset = (page - 1) * page_size
+
+    # Build WHERE clause from filters
+    conditions = []
+    params: list = []
+    if agent:
+        params.append(agent)
+        conditions.append(f"agent_slug = ${len(params)}")
+    if direction:
+        params.append(direction)
+        conditions.append(f"direction = ${len(params)}")
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
     pool = db.get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """SELECT call_uuid, agent_slug, did, started_at, ended_at,
-                      duration_seconds, turn_count, stt_provider, llm_provider,
-                      tts_provider, end_reason
-               FROM call_logs ORDER BY started_at DESC NULLS LAST LIMIT 50"""
+            f"""SELECT call_uuid, agent_slug, did, destination, direction,
+                      started_at, ended_at, duration_seconds, turn_count,
+                      stt_provider, llm_provider, tts_provider, end_reason
+               FROM call_logs {where}
+               ORDER BY started_at DESC NULLS LAST
+               LIMIT {page_size} OFFSET {offset}""",
+            *params,
         )
-        total = await conn.fetchval("SELECT COUNT(*) FROM call_logs")
+        total = await conn.fetchval(
+            f"SELECT COUNT(*) FROM call_logs {where}", *params
+        )
+        agent_slugs = await conn.fetch(
+            "SELECT DISTINCT agent_slug FROM call_logs ORDER BY agent_slug"
+        )
+    import math
+    total_pages = max(1, math.ceil(total / page_size))
     return templates.TemplateResponse(
         request,
         "calls/list.html",
-        {"calls": [dict(r) for r in rows], "total": total},
+        {
+            "calls": [dict(r) for r in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "filter_agent": agent,
+            "filter_direction": direction,
+            "agent_slugs": [r["agent_slug"] for r in agent_slugs],
+        },
     )
 
 

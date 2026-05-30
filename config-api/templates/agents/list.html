@@ -21,17 +21,28 @@
       {% for a in agents %}
       <tr>
         <td><code>{{ a.slug }}</code></td>
-        <td>{{ a.display_name }}</td>
+        <td class="fw-medium">{{ a.display_name }}</td>
         <td>
           {% if a.is_active %}
-            <span class="badge bg-success">active</span>
+            <span class="badge bg-success-subtle text-success border border-success-subtle">active</span>
           {% else %}
-            <span class="badge bg-secondary">inactive</span>
+            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">inactive</span>
           {% endif %}
         </td>
         <td class="text-muted small">{{ a.updated_at.strftime('%Y-%m-%d %H:%M') if a.updated_at else '—' }}</td>
         <td class="text-end">
           <a href="/admin/agents/{{ a.slug }}/edit" class="btn btn-outline-secondary btn-sm">Edit</a>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5">
+          <div class="empty-state">
+            <div class="empty-icon"><i class="bi bi-robot"></i></div>
+            <div class="fw-semibold mb-1">No agents yet</div>
+            <div class="small mb-3">Agents handle inbound and outbound calls.</div>
+            <a href="/admin/agents/new" class="btn btn-primary btn-sm">+ New agent</a>
+          </div>
         </td>
       </tr>
       {% endfor %}

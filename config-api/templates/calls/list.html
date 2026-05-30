@@ -3,77 +3,169 @@
 {% block content %}
 
 <div class="d-flex justify-content-between align-items-center mb-3">
-  <h4 class="mb-0">Call History <span class="text-muted fs-6 fw-normal">{{ total }} total</span></h4>
+  <h4 class="mb-0">
+    <i class="bi bi-journal-text me-2 text-muted"></i>Call History
+    <span class="text-muted fs-6 fw-normal ms-1">{{ total }} total</span>
+  </h4>
+</div>
+
+<!-- Filters -->
+<div class="card shadow-sm mb-3">
+  <div class="card-body py-2">
+    <form method="get" action="/admin/calls" class="row g-2 align-items-end">
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label small mb-1 fw-semibold">Agent</label>
+        <select name="agent" class="form-select form-select-sm" onchange="this.form.submit()">
+          <option value="">All agents</option>
+          {% for a in agent_slugs %}
+          <option value="{{ a }}" {% if a == filter_agent %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label small mb-1 fw-semibold">Direction</label>
+        <select name="direction" class="form-select form-select-sm" onchange="this.form.submit()">
+          <option value="">All</option>
+          <option value="inbound"  {% if filter_direction == 'inbound'  %}selected{% endif %}>📞 Inbound</option>
+          <option value="outbound" {% if filter_direction == 'outbound' %}selected{% endif %}>📤 Outbound</option>
+        </select>
+      </div>
+      {% if filter_agent or filter_direction %}
+      <div class="col-auto">
+        <a href="/admin/calls" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-x-lg me-1"></i>Clear
+        </a>
+      </div>
+      {% endif %}
+    </form>
+  </div>
 </div>
 
 {% if not calls %}
-<div class="text-muted">No calls recorded yet.</div>
+<div class="card shadow-sm">
+  <div class="empty-state">
+    <div class="empty-icon"><i class="bi bi-journal-text"></i></div>
+    <div class="fw-semibold mb-1">No calls yet</div>
+    <div class="small">Call records appear here after the first connection.</div>
+  </div>
+</div>
 {% else %}
 <div class="card shadow-sm">
-  <table class="table table-hover mb-0">
-    <thead class="table-light">
-      <tr>
-        <th>Time</th>
-        <th></th>
-        <th>DID / Destination</th>
-        <th>Agent</th>
-        <th>Duration</th>
-        <th>Turns</th>
-        <th>Providers</th>
-        <th>Reason</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for c in calls %}
-      <tr>
-        <td class="text-muted small text-nowrap">
-          {{ c.started_at.strftime('%m-%d %H:%M') if c.started_at else '—' }}
-        </td>
-        <td>
-          {% if c.get('direction') == 'outbound' %}
-          <span class="badge bg-primary" title="Outbound">📤</span>
-          {% else %}
-          <span class="badge bg-success" title="Inbound">📞</span>
-          {% endif %}
-        </td>
-        <td><code>{{ c.get('destination') or c.did or '—' }}</code></td>
-        <td>
-          <a href="/admin/agents/{{ c.agent_slug }}/edit" class="text-decoration-none">
-            {{ c.agent_slug }}
-          </a>
-        </td>
-        <td>
-          {% if c.duration_seconds is not none %}
-            {% set m = (c.duration_seconds // 60) %}
-            {% set s = (c.duration_seconds % 60) %}
-            {{ '%d:%02d'|format(m, s) }}
-          {% else %}—{% endif %}
-        </td>
-        <td class="text-center">{{ c.turn_count }}</td>
-        <td class="text-muted small">
-          {{ c.stt_provider or '?' }} /
-          {{ c.llm_provider or '?' }} /
-          {{ c.tts_provider or '?' }}
-        </td>
-        <td>
-          <span class="badge {% if c.end_reason == 'hangup' %}bg-secondary{% elif c.end_reason == 'error' %}bg-danger{% else %}bg-light text-dark{% endif %}">
-            {{ c.end_reason or '?' }}
-          </span>
-        </td>
-        <td>
-          <a href="/admin/calls/{{ c.call_uuid }}" class="btn btn-outline-secondary btn-sm">
-            Transcript
-          </a>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="table-responsive">
+    <table class="table table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th class="text-nowrap">Time</th>
+          <th></th>
+          <th>From / To</th>
+          <th>Agent</th>
+          <th>Duration</th>
+          <th class="text-center">Turns</th>
+          <th class="d-none d-lg-table-cell">Providers</th>
+          <th class="d-none d-md-table-cell">Reason</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in calls %}
+        <tr>
+          <td class="text-muted small text-nowrap">
+            {{ c.started_at.strftime('%m-%d %H:%M') if c.started_at else '—' }}
+          </td>
+          <td>
+            {% if c.get('direction') == 'outbound' %}
+            <span class="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle" title="Outbound">
+              <i class="bi bi-arrow-up-right"></i>
+            </span>
+            {% else %}
+            <span class="badge rounded-pill bg-success-subtle text-success border border-success-subtle" title="Inbound">
+              <i class="bi bi-arrow-down-left"></i>
+            </span>
+            {% endif %}
+          </td>
+          <td class="text-nowrap"><code class="small">{{ c.get('destination') or c.did or '—' }}</code></td>
+          <td>
+            <a href="/admin/agents/{{ c.agent_slug }}/edit" class="text-decoration-none fw-medium">
+              {{ c.agent_slug }}
+            </a>
+          </td>
+          <td class="text-nowrap">
+            {% if c.duration_seconds is not none %}
+              {% set m = (c.duration_seconds // 60) %}
+              {% set s = (c.duration_seconds % 60) %}
+              <span class="small">{{ '%d:%02d'|format(m, s) }}</span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td class="text-center">
+            <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">
+              {{ c.turn_count }}
+            </span>
+          </td>
+          <td class="text-muted small d-none d-lg-table-cell text-nowrap">
+            {{ c.stt_provider or '?' }} / {{ c.llm_provider or '?' }} / {{ c.tts_provider or '?' }}
+          </td>
+          <td class="d-none d-md-table-cell">
+            <span class="badge
+              {% if c.end_reason == 'hangup' %}bg-secondary
+              {% elif c.end_reason == 'error' %}bg-danger
+              {% elif c.end_reason == 'no_answer' %}bg-warning text-dark
+              {% else %}bg-light text-dark border{% endif %}
+              small">
+              {{ c.end_reason or '?' }}
+            </span>
+          </td>
+          <td>
+            <a href="/admin/calls/{{ c.call_uuid }}" class="btn btn-outline-secondary btn-sm">
+              <i class="bi bi-chat-left-text me-1"></i>Transcript
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 
-{% if total > 50 %}
-<div class="text-muted small mt-2">Showing last 50 calls.</div>
+<!-- Pagination -->
+{% if total > page_size %}
+<nav class="mt-3 d-flex justify-content-between align-items-center">
+  <span class="text-muted small">
+    Showing {{ (page - 1) * page_size + 1 }}–{{ [page * page_size, total] | min }} of {{ total }}
+  </span>
+  <ul class="pagination pagination-sm mb-0">
+    {% if page > 1 %}
+    <li class="page-item">
+      <a class="page-link" href="?page={{ page - 1 }}{% if filter_agent %}&agent={{ filter_agent }}{% endif %}{% if filter_direction %}&direction={{ filter_direction }}{% endif %}">
+        <i class="bi bi-chevron-left"></i>
+      </a>
+    </li>
+    {% else %}
+    <li class="page-item disabled"><span class="page-link"><i class="bi bi-chevron-left"></i></span></li>
+    {% endif %}
+
+    {% for p in range(1, total_pages + 1) %}
+      {% if p == page %}
+      <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+      {% elif p == 1 or p == total_pages or (p >= page - 2 and p <= page + 2) %}
+      <li class="page-item">
+        <a class="page-link" href="?page={{ p }}{% if filter_agent %}&agent={{ filter_agent }}{% endif %}{% if filter_direction %}&direction={{ filter_direction }}{% endif %}">{{ p }}</a>
+      </li>
+      {% elif p == page - 3 or p == page + 3 %}
+      <li class="page-item disabled"><span class="page-link">…</span></li>
+      {% endif %}
+    {% endfor %}
+
+    {% if page < total_pages %}
+    <li class="page-item">
+      <a class="page-link" href="?page={{ page + 1 }}{% if filter_agent %}&agent={{ filter_agent }}{% endif %}{% if filter_direction %}&direction={{ filter_direction }}{% endif %}">
+        <i class="bi bi-chevron-right"></i>
+      </a>
+    </li>
+    {% else %}
+    <li class="page-item disabled"><span class="page-link"><i class="bi bi-chevron-right"></i></span></li>
+    {% endif %}
+  </ul>
+</nav>
 {% endif %}
 {% endif %}
 
