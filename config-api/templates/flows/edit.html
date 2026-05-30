@@ -51,7 +51,7 @@
     <!-- React Flow mounts here; reads initial definition from data attr -->
     <div
       id="flow-editor-root"
-      data-definition="{{ definition_json | replace('"', '&quot;') }}"
+      data-definition="{{ definition_json | e | safe }}"
     ></div>
 
     <!-- Textarea kept in sync by React app, submitted with the form -->
