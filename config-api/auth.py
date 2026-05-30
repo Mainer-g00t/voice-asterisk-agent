@@ -2,8 +2,11 @@
 Authentication helpers for the Voice Agent admin.
 
 Two independent layers:
-  - Admin UI  (/admin/*):  session cookie (HMAC-signed, keyed by ADMIN_PASSWORD)
+  - Admin UI  (/admin/*):  session cookie (random token → Redis lookup)
   - REST API  (/api/*):    X-Api-Key header (compared against API_KEY env var)
+
+ADMIN_PASSWORD is kept as an emergency backdoor — it still produces a valid
+session cookie without touching the DB/Redis user system.
 
 If the env vars are empty, auth is skipped and a warning is logged at startup.
 /internal/* is never checked — Docker-network isolation is its gate.
@@ -11,6 +14,7 @@ If the env vars are empty, auth is skipped and a warning is logged at startup.
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 
@@ -22,18 +26,19 @@ log = logging.getLogger(__name__)
 ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "")
 API_KEY: str = os.getenv("API_KEY", "")
 COOKIE_NAME = "va_session"
+SESSION_TTL = 86400 * 30  # 30 days
 
 # Warn once at import time so it shows in container logs on startup
 if not ADMIN_PASSWORD:
-    log.warning("ADMIN_PASSWORD not set — admin UI is unprotected")
+    log.warning("ADMIN_PASSWORD not set — password backdoor disabled")
 if not API_KEY:
     log.warning("API_KEY not set — REST API is unprotected")
 
 
-# ── Session (admin UI) ────────────────────────────────────────────────────────
+# ── Admin backdoor (HMAC, stateless) ─────────────────────────────────────────
 
-def _session_token() -> str:
-    """Deterministic HMAC of a fixed string keyed by ADMIN_PASSWORD."""
+def _admin_token() -> str:
+    """Deterministic HMAC token for the password backdoor."""
     return hmac.new(
         ADMIN_PASSWORD.encode(),
         b"va-admin-session-v1",
@@ -41,18 +46,47 @@ def _session_token() -> str:
     ).hexdigest()
 
 
-def has_valid_session(request: Request) -> bool:
-    """Return True if the request carries a valid session cookie."""
-    if not ADMIN_PASSWORD:
-        return True
+def make_admin_session_cookie() -> str:
+    return _admin_token()
+
+
+# ── OAuth sessions (Redis-backed) ─────────────────────────────────────────────
+
+async def get_session_user(request: Request) -> dict | None:
+    """
+    Return the user dict for the current session, or None if not authenticated.
+
+    Checks in order:
+    1. ADMIN_PASSWORD backdoor — HMAC cookie, returns synthetic admin user
+    2. OAuth session — random token looked up in Redis
+    3. No ADMIN_PASSWORD + no OAuth configured — allow all (dev mode)
+    """
+    import redis_client  # late import to avoid circular dep at module load
+
     token = request.cookies.get(COOKIE_NAME, "")
-    if not token:
-        return False
-    return hmac.compare_digest(token, _session_token())
+
+    # Dev mode: no auth configured at all → let everyone through
+    if not ADMIN_PASSWORD and not os.getenv("GITHUB_CLIENT_ID"):
+        return {"user_id": "dev", "name": "Dev", "email": "", "avatar_url": ""}
+
+    # ADMIN_PASSWORD backdoor
+    if ADMIN_PASSWORD and token and hmac.compare_digest(token, _admin_token()):
+        return {"user_id": "admin", "name": "Admin", "email": "", "avatar_url": ""}
+
+    # OAuth session via Redis
+    if token:
+        try:
+            raw = await redis_client.get_redis().get(f"session:{token}")
+            if raw:
+                return json.loads(raw)
+        except Exception as exc:
+            log.warning("Redis session lookup failed: %s", exc)
+
+    return None
 
 
-def make_session_cookie_value() -> str:
-    return _session_token()
+async def has_valid_session(request: Request) -> bool:
+    return (await get_session_user(request)) is not None
 
 
 # ── API key ───────────────────────────────────────────────────────────────────
@@ -67,32 +101,39 @@ def has_valid_api_key(request: Request) -> bool:
     return hmac.compare_digest(key, API_KEY)
 
 
-# ── Starlette middleware helpers ──────────────────────────────────────────────
+# ── Starlette middleware ──────────────────────────────────────────────────────
 
 def _next_url(request: Request) -> str:
-    """Build ?next= param to return the user to the right page after login."""
     path = request.url.path
-    if path and path != "/admin/login":
+    if path and path not in ("/admin/login", "/admin/logout") and not path.startswith("/admin/auth"):
         return f"/admin/login?next={path}"
     return "/admin/login"
 
 
 async def admin_auth_middleware(request: Request, call_next):
-    """Protect /admin/* — redirect to login if session cookie is missing/invalid."""
+    """Protect /admin/* — redirect to login if not authenticated."""
     path = request.url.path
-    # Always allow login / logout pages and static assets
-    if not path.startswith("/admin/") or path.startswith("/admin/login") or path.startswith("/admin/logout"):
+    # Always pass: login page, logout, OAuth callbacks, static assets
+    if (not path.startswith("/admin/")
+            or path.startswith("/admin/login")
+            or path.startswith("/admin/logout")
+            or path.startswith("/admin/auth/")):
         return await call_next(request)
-    if not has_valid_session(request):
+
+    user = await get_session_user(request)
+    if not user:
         return RedirectResponse(_next_url(request), status_code=303)
+
+    # Attach user to request state so templates can read it
+    request.state.user = user
     return await call_next(request)
 
 
 async def api_auth_middleware(request: Request, call_next):
-    """Protect /api/* — require either a valid session cookie or X-Api-Key header."""
+    """Protect /api/* — require valid session cookie or X-Api-Key."""
     path = request.url.path
     if not path.startswith("/api/"):
         return await call_next(request)
-    if has_valid_session(request) or has_valid_api_key(request):
+    if await has_valid_session(request) or has_valid_api_key(request):
         return await call_next(request)
     return JSONResponse({"detail": "Forbidden — provide X-Api-Key header"}, status_code=403)
