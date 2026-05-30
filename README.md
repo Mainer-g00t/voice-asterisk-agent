@@ -302,7 +302,21 @@ The canvas stores flow definitions as JSON in Postgres. `_positions` holds canva
 
 ### 📋 Calls — call history and transcripts
 
-Every completed call is logged automatically: direction (inbound 📞 / outbound 📤), duration, turn count, STT/LLM/TTS providers used, end reason, and the full conversation transcript. Click **Transcript** on any row to view the chat-bubble replay.
+Every completed call is logged automatically. The table shows:
+
+| Column | Inbound | Outbound |
+|---|---|---|
+| **From** | Caller's number (`CALLERID` from Asterisk) | Your caller ID (e.g. `"Acme <+10000000>"`) |
+| **To** | Your DID that was dialed | Destination number/endpoint |
+| **Agent** | Which agent handled the call | — |
+| **Duration** | — | — |
+| **Turns** | STT→LLM→TTS round-trips | — |
+| **Providers** | STT / LLM / TTS used | — |
+| **Reason** | How the call ended (`hangup`, `error`, …) | — |
+
+Click **Transcript** on any row to view the full chat-bubble replay.
+
+All tables support **live search** (filter any column as you type) and **sortable columns** (click a header to sort ascending → descending → original).
 
 ---
 
@@ -468,7 +482,7 @@ Admin UI ──▶ config-api (FastAPI :8080) ──▶ Postgres (source of trut
                                         call template vars, flow execution stored here too
 ```
 
-Postgres tables: `agents`, `provider_configs`, `tool_definitions`, `specialist_configs`, `config_versions`, `phone_routes`, `call_logs`, `flows`, `flow_executions`, `flow_events`.
+Postgres tables: `agents`, `provider_configs`, `tool_definitions`, `specialist_configs`, `config_versions`, `phone_routes`, `call_logs`, `flows`, `flow_executions`, `flow_events`, `users`, `api_keys`.
 
 Migrations live in `config-api/migrations/`. Run `make migrate` after pulling new ones.
 
@@ -508,13 +522,33 @@ python3 -c "import secrets; print(secrets.token_hex(32))"
 
 Each GitHub account gets its own isolated workspace (agents, flows, routes, calls). Demo agents seeded by `make migrate` have no owner and are **visible to all users** — great for getting started. Each user can create their own agents and only sees their own data plus the shared demo content.
 
-### REST API with auth
+### REST API authentication
+
+There are two kinds of API keys:
+
+**Global key** (`API_KEY` env var) — admin-level, no owner filter, set once for the whole server:
+```bash
+curl -H "X-Api-Key: $API_KEY" http://localhost:8080/api/outbound/originate ...
+```
+
+**Per-user keys** — scoped to the user's own agents and calls. Generated in the admin UI:
+1. Sign in with GitHub
+2. Click your avatar (top-right) → **API Keys** → **New key**
+3. Copy the `sk-va-…` key — shown once, only the hash is stored
+4. Use it in any API call:
 
 ```bash
-# With API key (admin-level — sees all users' data)
-curl -H "X-Api-Key: $API_KEY" http://localhost:8080/api/agents
+curl -X POST http://localhost:8080/api/outbound/originate \
+  -H "X-Api-Key: sk-va-abc123..." \
+  -H "Content-Type: application/json" \
+  -d '{"destination": "+15551234567", "agent_slug": "basic"}'
+# Only succeeds for agents you own
+```
 
-# Check API docs for full reference
+Each user can create multiple named keys (e.g. "CI pipeline", "Campaign manager") and revoke them individually. `last_used_at` is tracked per key.
+
+```bash
+# Full API docs
 open http://localhost:8080/docs
 ```
 
