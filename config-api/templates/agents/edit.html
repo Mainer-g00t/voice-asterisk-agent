@@ -53,21 +53,140 @@
       </div>
     </div>
 
-    {% if tools %}
+    {% if agent %}
     <div class="card shadow-sm mb-4">
-      <div class="card-header fw-semibold">Tools</div>
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="fw-semibold">Tools</span>
+        <button type="button" class="btn btn-sm btn-outline-primary" onclick="showToolForm()">+ Add tool</button>
+      </div>
       <div class="card-body">
+
+        <!-- Existing tools list -->
+        <div id="tools-list">
         {% for t in tools %}
-        <div class="border rounded p-3 mb-3">
-          <div class="d-flex justify-content-between">
-            <code>{{ t.tool_name }}</code>
-            <span class="badge bg-secondary">{{ t.handler_type }}</span>
+        <div class="border rounded p-3 mb-2" id="tool-{{ t.tool_name }}">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <code class="fs-6">{{ t.tool_name }}</code>
+              <span class="badge bg-secondary ms-2">{{ t.handler_type }}</span>
+              {% if t.is_assigned_global %}<span class="badge bg-info ms-1">global</span>{% endif %}
+              <div class="text-muted small mt-1">{{ t.description }}</div>
+              {% if t.parameters %}
+              <div class="text-muted small mt-1">
+                Params: {% for k in t.parameters.keys() %}<code>{{ k }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+              </div>
+              {% endif %}
+            </div>
+            <div class="d-flex gap-1">
+              {% if t.is_assigned_global %}
+              <form method="post" action="/admin/agents/{{ agent.slug }}/tools/{{ t.id }}/unassign"
+                    onsubmit="return confirm('Remove global tool assignment?')">
+                <button class="btn btn-sm btn-outline-warning">Unassign</button>
+              </form>
+              {% else %}
+              <button type="button" class="btn btn-sm btn-outline-secondary"
+                onclick="editTool({{ t | tojson }})">Edit</button>
+              <form method="post" action="/admin/agents/{{ agent.slug }}/tools/{{ t.tool_name }}/delete"
+                    onsubmit="return confirm('Delete tool {{ t.tool_name }}?')">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+              {% endif %}
+            </div>
           </div>
-          <div class="text-muted small mt-1">{{ t.description }}</div>
         </div>
+        {% else %}
+        <p class="text-muted small mb-3">No tools configured. Add one below or assign from the <a href="/admin/tools">global library</a>.</p>
         {% endfor %}
-        <a href="/docs#/agents/upsert_tool_api_agents__slug__tools__tool_name__put" target="_blank"
-           class="btn btn-outline-secondary btn-sm">Manage tools via API</a>
+        </div>
+
+        <!-- Assign from global library -->
+        {% if global_tools %}
+        <div class="border-top pt-3 mt-2">
+          <div class="d-flex gap-2 align-items-end">
+            <div class="flex-grow-1">
+              <label class="form-label small text-muted mb-1">Assign from global library</label>
+              <select id="global-tool-select" class="form-select form-select-sm">
+                <option value="">— pick a global tool —</option>
+                {% for gt in global_tools %}
+                <option value="{{ gt.id }}">{{ gt.tool_name }} ({{ gt.handler_type }})</option>
+                {% endfor %}
+              </select>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-info" onclick="assignGlobalTool()">Assign</button>
+          </div>
+        </div>
+        {% endif %}
+
+        <!-- Add / Edit tool form (hidden by default) -->
+        <div id="tool-form-container" class="border rounded p-3 mt-3 bg-light d-none">
+          <h6 class="mb-3" id="tool-form-title">Add Tool</h6>
+          <input type="hidden" id="tf-original-name" value="">
+
+          <div class="row g-3 mb-3">
+            <div class="col-md-5">
+              <label class="form-label">Tool name <small class="text-muted">(snake_case)</small></label>
+              <input id="tf-name" class="form-control form-control-sm font-monospace"
+                     pattern="[a-z0-9_]+" placeholder="e.g. get_weather" required>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Handler type</label>
+              <select id="tf-handler" class="form-select form-select-sm" onchange="onHandlerChange()">
+                <option value="webhook">webhook</option>
+                <option value="transfer_call">transfer_call</option>
+                <option value="specialist_router">specialist_router</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Sort order</label>
+              <input id="tf-sort" type="number" class="form-control form-control-sm" value="0" min="0">
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Description</label>
+            <input id="tf-description" class="form-control form-control-sm" placeholder="What this tool does">
+          </div>
+
+          <!-- Webhook-specific config -->
+          <div id="tf-webhook-config" class="mb-3 p-3 border rounded bg-white">
+            <label class="form-label fw-semibold small">Webhook config</label>
+            <div class="row g-2">
+              <div class="col-md-9">
+                <label class="form-label small">URL</label>
+                <input id="tf-webhook-url" class="form-control form-control-sm" placeholder="https://example.com/webhook">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label small">Timeout (s)</label>
+                <input id="tf-webhook-timeout" type="number" class="form-control form-control-sm" value="10" min="1" max="60">
+              </div>
+            </div>
+          </div>
+
+          <!-- Parameter builder -->
+          <div class="mb-3">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <label class="form-label mb-0 fw-semibold small">Parameters</label>
+              <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addParamRow()">+ Add parameter</button>
+            </div>
+            <div id="tf-params-table">
+              <div class="row g-1 text-muted small mb-1 d-none d-md-flex">
+                <div class="col-md-2">Name</div>
+                <div class="col-md-2">Type</div>
+                <div class="col-md-4">Description</div>
+                <div class="col-md-2">Enum values</div>
+                <div class="col-md-1 text-center">Req?</div>
+                <div class="col-md-1"></div>
+              </div>
+              <!-- rows injected by JS -->
+            </div>
+          </div>
+
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-primary btn-sm" onclick="saveTool()">Save tool</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="hideToolForm()">Cancel</button>
+          </div>
+        </div>
+
       </div>
     </div>
     {% endif %}
@@ -149,4 +268,193 @@
   </div>
 </div>
 </form>
+
+<script>
+// ── Tool form helpers ───────────────────────────────────────────────────────
+
+const agentSlug = "{{ agent.slug if agent else '' }}";
+
+function showToolForm(title) {
+  document.getElementById('tool-form-container').classList.remove('d-none');
+  document.getElementById('tool-form-title').textContent = title || 'Add Tool';
+  onHandlerChange();
+}
+
+function hideToolForm() {
+  document.getElementById('tool-form-container').classList.add('d-none');
+  resetToolForm();
+}
+
+function resetToolForm() {
+  document.getElementById('tf-original-name').value = '';
+  document.getElementById('tf-name').value = '';
+  document.getElementById('tf-handler').value = 'webhook';
+  document.getElementById('tf-description').value = '';
+  document.getElementById('tf-sort').value = '0';
+  document.getElementById('tf-webhook-url').value = '';
+  document.getElementById('tf-webhook-timeout').value = '10';
+  document.getElementById('tf-params-table').querySelectorAll('.param-row').forEach(r => r.remove());
+  onHandlerChange();
+}
+
+function onHandlerChange() {
+  const handler = document.getElementById('tf-handler').value;
+  const webhookCfg = document.getElementById('tf-webhook-config');
+  webhookCfg.style.display = handler === 'webhook' ? '' : 'none';
+}
+
+function editTool(t) {
+  showToolForm('Edit Tool');
+  document.getElementById('tf-original-name').value = t.tool_name;
+  document.getElementById('tf-name').value = t.tool_name;
+  document.getElementById('tf-handler').value = t.handler_type;
+  document.getElementById('tf-description').value = t.description || '';
+  document.getElementById('tf-sort').value = t.sort_order || 0;
+
+  const hc = t.handler_config || {};
+  document.getElementById('tf-webhook-url').value = hc.url || '';
+  document.getElementById('tf-webhook-timeout').value = hc.timeout || 10;
+
+  // Load parameters
+  document.getElementById('tf-params-table').querySelectorAll('.param-row').forEach(r => r.remove());
+  const params = t.parameters || {};
+  const required = t.required_params || [];
+  for (const [name, schema] of Object.entries(params)) {
+    addParamRow({
+      name, type: schema.type || 'string',
+      description: schema.description || '',
+      enumValues: (schema.enum || []).join(', '),
+      required: required.includes(name),
+    });
+  }
+  onHandlerChange();
+}
+
+function addParamRow(data) {
+  data = data || {};
+  const container = document.getElementById('tf-params-table');
+  const row = document.createElement('div');
+  row.className = 'row g-1 mb-1 align-items-center param-row';
+  row.innerHTML = `
+    <div class="col-md-2">
+      <input class="form-control form-control-sm param-name font-monospace"
+             placeholder="param_name" value="${esc(data.name || '')}">
+    </div>
+    <div class="col-md-2">
+      <select class="form-select form-select-sm param-type" onchange="toggleEnum(this)">
+        ${['string','number','integer','boolean'].map(t =>
+          `<option value="${t}" ${data.type===t?'selected':''}>${t}</option>`
+        ).join('')}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <input class="form-control form-control-sm param-desc" placeholder="Description"
+             value="${esc(data.description || '')}">
+    </div>
+    <div class="col-md-2">
+      <input class="form-control form-control-sm param-enum" placeholder="val1, val2"
+             value="${esc(data.enumValues || '')}"
+             style="display:${data.type==='boolean'?'none':''}">
+    </div>
+    <div class="col-md-1 text-center">
+      <input type="checkbox" class="form-check-input param-required" ${data.required?'checked':''}>
+    </div>
+    <div class="col-md-1 text-center">
+      <button type="button" class="btn btn-sm btn-outline-danger px-2 py-0"
+              onclick="this.closest('.param-row').remove()">×</button>
+    </div>`;
+  container.appendChild(row);
+}
+
+function toggleEnum(sel) {
+  const enumInput = sel.closest('.param-row').querySelector('.param-enum');
+  enumInput.style.display = sel.value === 'boolean' ? 'none' : '';
+}
+
+function esc(s) {
+  return String(s).replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function buildPayload() {
+  const handler = document.getElementById('tf-handler').value;
+
+  // Build parameters object from rows
+  const parameters = {};
+  const required_params = [];
+  document.querySelectorAll('.param-row').forEach(row => {
+    const name = row.querySelector('.param-name').value.trim();
+    if (!name) return;
+    const type = row.querySelector('.param-type').value;
+    const desc = row.querySelector('.param-desc').value.trim();
+    const enumRaw = row.querySelector('.param-enum').value.trim();
+    const isReq = row.querySelector('.param-required').checked;
+
+    const schema = { type };
+    if (desc) schema.description = desc;
+    if (type === 'string' && enumRaw) {
+      schema.enum = enumRaw.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    parameters[name] = schema;
+    if (isReq) required_params.push(name);
+  });
+
+  // Build handler_config
+  let handler_config = null;
+  if (handler === 'webhook') {
+    const url = document.getElementById('tf-webhook-url').value.trim();
+    const timeout = parseInt(document.getElementById('tf-webhook-timeout').value) || 10;
+    if (url) handler_config = { url, timeout };
+  }
+
+  return {
+    tool_name: document.getElementById('tf-name').value.trim(),
+    handler_type: handler,
+    description: document.getElementById('tf-description').value.trim(),
+    sort_order: parseInt(document.getElementById('tf-sort').value) || 0,
+    parameters,
+    required_params,
+    handler_config,
+  };
+}
+
+async function saveTool() {
+  const payload = buildPayload();
+  if (!payload.tool_name) { alert('Tool name is required'); return; }
+
+  const originalName = document.getElementById('tf-original-name').value;
+  const url = `/api/agents/${agentSlug}/tools/${payload.tool_name}`;
+
+  // If renaming, delete the old one first
+  if (originalName && originalName !== payload.tool_name) {
+    await fetch(`/api/agents/${agentSlug}/tools/${originalName}`, { method: 'DELETE' });
+  }
+
+  const resp = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (resp.ok) {
+    window.location.reload();
+  } else {
+    const err = await resp.json().catch(() => ({}));
+    alert('Save failed: ' + (err.detail || resp.statusText));
+  }
+}
+
+async function assignGlobalTool() {
+  const sel = document.getElementById('global-tool-select');
+  const toolId = sel.value;
+  if (!toolId) { alert('Select a global tool first'); return; }
+
+  const resp = await fetch(`/api/agents/${agentSlug}/tools/assign/${toolId}`, { method: 'POST' });
+  if (resp.ok) {
+    window.location.reload();
+  } else {
+    const err = await resp.json().catch(() => ({}));
+    alert('Assign failed: ' + (err.detail || resp.statusText));
+  }
+}
+</script>
 {% endblock %}

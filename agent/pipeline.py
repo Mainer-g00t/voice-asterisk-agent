@@ -186,10 +186,7 @@ def _register_tools(llm, tool_configs: list[dict], agent_config: dict) -> None:
             continue
         # Factories that need the full config (e.g. specialist_router) accept it;
         # simple handlers can be registered directly.
-        try:
-            handler = factory(agent_config)
-        except TypeError:
-            handler = factory()
+        handler = factory(agent_config, tc)
         llm.register_function(tool_name, handler)
         logger.info(f"Registered tool '{tool_name}' (handler_type={handler_type!r})")
 

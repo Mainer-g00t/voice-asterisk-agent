@@ -50,6 +50,7 @@ class ToolDefinition(BaseModel):
     parameters: dict[str, Any]
     required_params: list[str] = []
     sort_order: int = 0
+    handler_config: dict[str, Any] | None = None
 
 
 class SpecialistConfig(BaseModel):
@@ -200,19 +201,60 @@ async def upsert_tool(slug: str, tool_name: str, body: ToolDefinition):
             agent_id = await _get_agent_id(conn, slug)
             await conn.execute(
                 """INSERT INTO tool_definitions
-                       (agent_id, tool_name, handler_type, description, parameters, required_params, sort_order)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7)
-                   ON CONFLICT (agent_id, tool_name) DO UPDATE SET
-                       handler_type = EXCLUDED.handler_type,
-                       description = EXCLUDED.description,
-                       parameters = EXCLUDED.parameters,
+                       (agent_id, tool_name, handler_type, description, parameters,
+                        required_params, sort_order, handler_config)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                   ON CONFLICT ON CONSTRAINT tool_definitions_agent_tool_name_idx DO UPDATE SET
+                       handler_type   = EXCLUDED.handler_type,
+                       description    = EXCLUDED.description,
+                       parameters     = EXCLUDED.parameters,
                        required_params = EXCLUDED.required_params,
-                       sort_order = EXCLUDED.sort_order""",
+                       sort_order     = EXCLUDED.sort_order,
+                       handler_config = EXCLUDED.handler_config""",
                 agent_id, tool_name, body.handler_type, body.description,
                 json.dumps(body.parameters), body.required_params, body.sort_order,
+                json.dumps(body.handler_config) if body.handler_config else None,
             )
     await _push_snapshot(slug)
     return {"status": "updated"}
+
+
+@router.post("/{slug}/tools/assign/{tool_id}", status_code=201)
+async def assign_global_tool(slug: str, tool_id: str, sort_order: int = 0):
+    """Assign a global tool to an agent."""
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            agent_id = await _get_agent_id(conn, slug)
+            # Verify tool exists and is global
+            tool = await conn.fetchrow(
+                "SELECT id FROM tool_definitions WHERE id = $1 AND is_global = TRUE", tool_id
+            )
+            if not tool:
+                raise HTTPException(status_code=404, detail="Global tool not found")
+            await conn.execute(
+                """INSERT INTO agent_tool_refs (agent_id, tool_id, sort_order)
+                   VALUES ($1, $2, $3)
+                   ON CONFLICT (agent_id, tool_id) DO UPDATE SET sort_order = EXCLUDED.sort_order""",
+                agent_id, tool_id, sort_order,
+            )
+    await _push_snapshot(slug)
+    return {"status": "assigned"}
+
+
+@router.delete("/{slug}/tools/unassign/{tool_id}")
+async def unassign_global_tool(slug: str, tool_id: str):
+    """Remove a global tool assignment from an agent."""
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            agent_id = await _get_agent_id(conn, slug)
+            await conn.execute(
+                "DELETE FROM agent_tool_refs WHERE agent_id = $1 AND tool_id = $2",
+                agent_id, tool_id,
+            )
+    await _push_snapshot(slug)
+    return {"status": "unassigned"}
 
 
 @router.delete("/{slug}/tools/{tool_name}")

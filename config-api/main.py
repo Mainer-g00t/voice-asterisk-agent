@@ -18,7 +18,7 @@ from fastapi.templating import Jinja2Templates
 
 import db
 import redis_client
-from routers import agents, calls, internal, admin_ui, routes
+from routers import agents, calls, internal, admin_ui, routes, tools
 
 load_dotenv()
 
@@ -38,8 +38,9 @@ app = FastAPI(title="Voice Agent Config API", lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
+app.include_router(tools.router,  prefix="/api/tools",  tags=["tools"])
 app.include_router(routes.router, prefix="/api/routes", tags=["routes"])
-app.include_router(calls.router, prefix="/api/calls", tags=["calls"])
+app.include_router(calls.router,  prefix="/api/calls",  tags=["calls"])
 app.include_router(internal.router, prefix="/internal", tags=["internal"])
 app.include_router(admin_ui.router, prefix="/admin", tags=["admin"])
 

@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block title %}Tool Library — Voice Agent Admin{% endblock %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h5 class="mb-0">🔧 Global Tool Library</h5>
+  <button type="button" class="btn btn-primary btn-sm" onclick="showAddForm()">+ New global tool</button>
+</div>
+
+{% if flash %}
+<div class="alert alert-{{ flash_type or 'success' }} py-2">{{ flash }}</div>
+{% endif %}
+
+<p class="text-muted small">
+  Global tools are defined once here and can be assigned to any agent from the agent edit page.
+  Agent-specific tools (defined per-agent) override globals with the same name.
+</p>
+
+<!-- Tools table -->
+<div class="card shadow-sm mb-4">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Tool name</th>
+          <th>Handler type</th>
+          <th>Description</th>
+          <th>Parameters</th>
+          <th class="text-center">Agents</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in tools %}
+        <tr>
+          <td><code>{{ t.tool_name }}</code></td>
+          <td><span class="badge bg-secondary">{{ t.handler_type }}</span></td>
+          <td class="text-muted small">{{ t.description }}</td>
+          <td class="text-muted small">
+            {% if t.parameters %}
+              {% for k in t.parameters.keys() %}<code>{{ k }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-center">{{ t.agent_count }}</td>
+          <td class="text-end">
+            <button type="button" class="btn btn-sm btn-outline-secondary"
+                onclick="editTool({{ t | tojson }})">Edit</button>
+            <form method="post" action="/admin/tools/{{ t.tool_name }}/delete"
+                  style="display:inline" onsubmit="return confirm('Delete {{ t.tool_name }}?')">
+              <button class="btn btn-sm btn-outline-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-muted text-center py-4">No global tools yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Add / Edit form (hidden by default) -->
+<div id="tool-form" class="card shadow-sm d-none">
+  <div class="card-header fw-semibold" id="form-title">New global tool</div>
+  <div class="card-body">
+    <input type="hidden" id="tf-original-name" value="">
+
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <label class="form-label">Tool name <small class="text-muted">(snake_case)</small></label>
+        <input id="tf-name" class="form-control font-monospace" pattern="[a-z0-9_]+" placeholder="e.g. get_weather" required>
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">Handler type</label>
+        <select id="tf-handler" class="form-select" onchange="onHandlerChange()">
+          <option value="webhook">webhook</option>
+          <option value="transfer_call">transfer_call</option>
+          <option value="specialist_router">specialist_router</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Sort order</label>
+        <input id="tf-sort" type="number" class="form-control" value="0" min="0">
+      </div>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Description</label>
+      <input id="tf-description" class="form-control" placeholder="What this tool does">
+    </div>
+
+    <!-- Webhook config -->
+    <div id="tf-webhook-config" class="mb-3 p-3 border rounded bg-light">
+      <label class="form-label fw-semibold small">Webhook config</label>
+      <div class="row g-2">
+        <div class="col-md-9">
+          <label class="form-label small">URL</label>
+          <input id="tf-webhook-url" class="form-control form-control-sm" placeholder="https://example.com/webhook">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Timeout (s)</label>
+          <input id="tf-webhook-timeout" type="number" class="form-control form-control-sm" value="10" min="1" max="60">
+        </div>
+      </div>
+    </div>
+
+    <!-- Parameter builder -->
+    <div class="mb-3">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <label class="form-label mb-0 fw-semibold">Parameters</label>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addParamRow()">+ Add parameter</button>
+      </div>
+      <div id="tf-params-table">
+        <div class="row g-1 text-muted small mb-1 d-none d-md-flex">
+          <div class="col-md-2">Name</div>
+          <div class="col-md-2">Type</div>
+          <div class="col-md-4">Description</div>
+          <div class="col-md-2">Enum values</div>
+          <div class="col-md-1 text-center">Req?</div>
+          <div class="col-md-1"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="d-flex gap-2">
+      <button type="button" class="btn btn-primary" onclick="saveTool()">Save</button>
+      <button type="button" class="btn btn-outline-secondary" onclick="hideForm()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function esc(s) { return String(s).replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
+function onHandlerChange() {
+  const h = document.getElementById('tf-handler').value;
+  document.getElementById('tf-webhook-config').style.display = h === 'webhook' ? '' : 'none';
+}
+
+function showAddForm() {
+  resetForm();
+  document.getElementById('form-title').textContent = 'New global tool';
+  document.getElementById('tool-form').classList.remove('d-none');
+  onHandlerChange();
+}
+
+function hideForm() {
+  document.getElementById('tool-form').classList.add('d-none');
+}
+
+function resetForm() {
+  document.getElementById('tf-original-name').value = '';
+  document.getElementById('tf-name').value = '';
+  document.getElementById('tf-handler').value = 'webhook';
+  document.getElementById('tf-description').value = '';
+  document.getElementById('tf-sort').value = '0';
+  document.getElementById('tf-webhook-url').value = '';
+  document.getElementById('tf-webhook-timeout').value = '10';
+  document.getElementById('tf-params-table').querySelectorAll('.param-row').forEach(r => r.remove());
+}
+
+function editTool(t) {
+  resetForm();
+  document.getElementById('form-title').textContent = 'Edit: ' + t.tool_name;
+  document.getElementById('tf-original-name').value = t.tool_name;
+  document.getElementById('tf-name').value = t.tool_name;
+  document.getElementById('tf-handler').value = t.handler_type;
+  document.getElementById('tf-description').value = t.description || '';
+  document.getElementById('tf-sort').value = t.sort_order || 0;
+  const hc = t.handler_config || {};
+  document.getElementById('tf-webhook-url').value = hc.url || '';
+  document.getElementById('tf-webhook-timeout').value = hc.timeout || 10;
+  const params = t.parameters || {};
+  const req = t.required_params || [];
+  for (const [name, schema] of Object.entries(params)) {
+    addParamRow({ name, type: schema.type || 'string', description: schema.description || '',
+                  enumValues: (schema.enum || []).join(', '), required: req.includes(name) });
+  }
+  document.getElementById('tool-form').classList.remove('d-none');
+  onHandlerChange();
+}
+
+function addParamRow(data) {
+  data = data || {};
+  const container = document.getElementById('tf-params-table');
+  const row = document.createElement('div');
+  row.className = 'row g-1 mb-1 align-items-center param-row';
+  row.innerHTML = `
+    <div class="col-md-2"><input class="form-control form-control-sm param-name font-monospace"
+         placeholder="param_name" value="${esc(data.name||'')}"></div>
+    <div class="col-md-2"><select class="form-select form-select-sm param-type" onchange="toggleEnum(this)">
+      ${['string','number','integer','boolean'].map(t=>`<option value="${t}" ${data.type===t?'selected':''}>${t}</option>`).join('')}
+    </select></div>
+    <div class="col-md-4"><input class="form-control form-control-sm param-desc" placeholder="Description"
+         value="${esc(data.description||'')}"></div>
+    <div class="col-md-2"><input class="form-control form-control-sm param-enum" placeholder="val1, val2"
+         value="${esc(data.enumValues||'')}" style="display:${data.type==='boolean'?'none':''}"></div>
+    <div class="col-md-1 text-center"><input type="checkbox" class="form-check-input param-required" ${data.required?'checked':''}></div>
+    <div class="col-md-1 text-center"><button type="button" class="btn btn-sm btn-outline-danger px-2 py-0"
+         onclick="this.closest('.param-row').remove()">×</button></div>`;
+  container.appendChild(row);
+}
+
+function toggleEnum(sel) {
+  sel.closest('.param-row').querySelector('.param-enum').style.display = sel.value === 'boolean' ? 'none' : '';
+}
+
+function buildPayload() {
+  const handler = document.getElementById('tf-handler').value;
+  const parameters = {}, required_params = [];
+  document.querySelectorAll('.param-row').forEach(row => {
+    const name = row.querySelector('.param-name').value.trim();
+    if (!name) return;
+    const type = row.querySelector('.param-type').value;
+    const desc = row.querySelector('.param-desc').value.trim();
+    const enumRaw = row.querySelector('.param-enum').value.trim();
+    const isReq = row.querySelector('.param-required').checked;
+    const schema = { type };
+    if (desc) schema.description = desc;
+    if (type === 'string' && enumRaw) schema.enum = enumRaw.split(',').map(s=>s.trim()).filter(Boolean);
+    parameters[name] = schema;
+    if (isReq) required_params.push(name);
+  });
+  let handler_config = null;
+  if (handler === 'webhook') {
+    const url = document.getElementById('tf-webhook-url').value.trim();
+    const timeout = parseInt(document.getElementById('tf-webhook-timeout').value)||10;
+    if (url) handler_config = { url, timeout };
+  }
+  return {
+    tool_name: document.getElementById('tf-name').value.trim(),
+    handler_type: handler,
+    description: document.getElementById('tf-description').value.trim(),
+    sort_order: parseInt(document.getElementById('tf-sort').value)||0,
+    parameters, required_params, handler_config,
+  };
+}
+
+async function saveTool() {
+  const payload = buildPayload();
+  if (!payload.tool_name) { alert('Tool name is required'); return; }
+  const originalName = document.getElementById('tf-original-name').value;
+  const isEdit = !!originalName;
+  const url = isEdit ? `/api/tools/${originalName}` : '/api/tools';
+  const method = isEdit ? 'PUT' : 'POST';
+  const resp = await fetch(url, { method, headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  if (resp.ok) { window.location.reload(); }
+  else { const e = await resp.json().catch(()=>({})); alert('Failed: '+(e.detail||resp.statusText)); }
+}
+</script>
+{% endblock %}

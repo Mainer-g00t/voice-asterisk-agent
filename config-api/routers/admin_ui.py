@@ -12,10 +12,13 @@ from fastapi.templating import Jinja2Templates
 
 import db
 import docker_manager
-from routers.agents import _push_snapshot
+from routers.agents import _push_snapshot, _get_agent_id
+
+import json as _json
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
+templates.env.filters["tojson"] = lambda v: _json.dumps(v, default=str)
 
 STT_OPTIONS = ["local", "openai", "deepgram"]
 LLM_OPTIONS = ["local", "openai", "anthropic"]
@@ -132,6 +135,57 @@ async def call_detail(request: Request, call_uuid: str):
     return templates.TemplateResponse(request, "calls/detail.html", {"call": call})
 
 
+# ── Global tool library UI ────────────────────────────────────────────────────
+
+@router.get("/tools", response_class=HTMLResponse)
+async def tools_list(request: Request, flash: str = ""):
+    tools = await db.list_global_tools()
+    return templates.TemplateResponse(
+        request, "tools/list.html",
+        {"tools": tools, "flash": flash or None},
+    )
+
+
+@router.post("/tools/{tool_name}/delete", response_class=HTMLResponse)
+async def delete_global_tool_ui(request: Request, tool_name: str):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM tool_definitions WHERE tool_name=$1 AND is_global=TRUE", tool_name
+        )
+    return RedirectResponse("/admin/tools?flash=Tool+deleted", status_code=303)
+
+
+# ── Agent-tool assignment UI helpers ─────────────────────────────────────────
+
+@router.post("/agents/{slug}/tools/{tool_name}/delete", response_class=HTMLResponse)
+async def delete_agent_tool_ui(request: Request, slug: str, tool_name: str):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            agent_id = await _get_agent_id(conn, slug)
+            await conn.execute(
+                "DELETE FROM tool_definitions WHERE agent_id=$1 AND tool_name=$2",
+                agent_id, tool_name,
+            )
+    await _push_snapshot(slug)
+    return RedirectResponse(f"/admin/agents/{slug}/edit?flash=Tool+deleted", status_code=303)
+
+
+@router.post("/agents/{slug}/tools/{tool_id}/unassign", response_class=HTMLResponse)
+async def unassign_global_tool_ui(request: Request, slug: str, tool_id: str):
+    pool = db.get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            agent_id = await _get_agent_id(conn, slug)
+            await conn.execute(
+                "DELETE FROM agent_tool_refs WHERE agent_id=$1 AND tool_id=$2",
+                agent_id, tool_id,
+            )
+    await _push_snapshot(slug)
+    return RedirectResponse(f"/admin/agents/{slug}/edit?flash=Tool+unassigned", status_code=303)
+
+
 @router.get("/agents", response_class=HTMLResponse)
 async def agents_list(request: Request):
     agents = await db.list_agents()
@@ -158,12 +212,13 @@ async def new_agent_form(request: Request):
 
 
 @router.get("/agents/{slug}/edit", response_class=HTMLResponse)
-async def edit_agent_form(request: Request, slug: str):
+async def edit_agent_form(request: Request, slug: str, flash: str = ""):
     data = await db.get_agent_full(slug)
     if not data:
         return RedirectResponse("/admin/agents")
 
     providers_by_type = {p["provider_type"]: p for p in data["providers"]}
+    global_tools = await db.list_global_tools()
 
     return templates.TemplateResponse(
         request,
@@ -174,10 +229,11 @@ async def edit_agent_form(request: Request, slug: str):
             "tools": data["tools"],
             "specialists": data["specialists"],
             "versions": data["versions"],
+            "global_tools": global_tools,
             "stt_options": STT_OPTIONS,
             "llm_options": LLM_OPTIONS,
             "tts_options": TTS_OPTIONS,
-            "flash": None,
+            "flash": flash or None,
         },
     )
 

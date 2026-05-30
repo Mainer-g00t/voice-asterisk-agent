@@ -22,7 +22,7 @@ def _get_client() -> anthropic.AsyncAnthropic:
     return _anthropic_client
 
 
-def make_specialist_handler(agent_config: dict):
+def make_specialist_handler(agent_config: dict, tool_config: dict | None = None):
     """
     Returns a closure that captures the specialists dict from the agent config
     snapshot. Called once per call in create_pipeline_task().
