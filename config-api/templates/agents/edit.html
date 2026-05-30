@@ -46,9 +46,12 @@
           <label class="form-label">System prompt</label>
           <textarea name="system_prompt" class="form-control mono" rows="10" required>{{ agent.system_prompt if agent else '' }}</textarea>
         </div>
-        <div>
+        <div class="mb-3">
           <label class="form-label">Greeting trigger <small class="text-muted">(injected as first user message)</small></label>
           <input name="greeting_trigger" class="form-control" value="{{ agent.greeting_trigger if agent else 'Hello' }}">
+        </div>
+        <div class="alert alert-secondary py-2 mb-0 small">
+          💡 Use <code>{placeholder}</code> in the prompt or greeting to inject values at call time via the outbound API's <code>template_vars</code> field — e.g. <code>{name}</code>, <code>{product}</code>.
         </div>
       </div>
     </div>
