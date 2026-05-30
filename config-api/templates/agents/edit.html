@@ -79,17 +79,13 @@
             </div>
             <div class="d-flex gap-1">
               {% if t.is_assigned_global %}
-              <form method="post" action="/admin/agents/{{ agent.slug }}/tools/{{ t.id }}/unassign"
-                    onsubmit="return confirm('Remove global tool assignment?')">
-                <button class="btn btn-sm btn-outline-warning">Unassign</button>
-              </form>
+              <button type="button" class="btn btn-sm btn-outline-warning"
+                onclick="unassignTool('{{ t.id }}')">Unassign</button>
               {% else %}
               <button type="button" class="btn btn-sm btn-outline-secondary"
                 onclick="editTool({{ t | tojson }})">Edit</button>
-              <form method="post" action="/admin/agents/{{ agent.slug }}/tools/{{ t.tool_name }}/delete"
-                    onsubmit="return confirm('Delete tool {{ t.tool_name }}?')">
-                <button class="btn btn-sm btn-outline-danger">Delete</button>
-              </form>
+              <button type="button" class="btn btn-sm btn-outline-danger"
+                onclick="deleteTool('{{ t.tool_name }}')">Delete</button>
               {% endif %}
             </div>
           </div>
@@ -441,6 +437,20 @@ async function saveTool() {
     const err = await resp.json().catch(() => ({}));
     alert('Save failed: ' + (err.detail || resp.statusText));
   }
+}
+
+async function unassignTool(toolId) {
+  if (!confirm('Remove global tool assignment?')) return;
+  const resp = await fetch(`/api/agents/${agentSlug}/tools/unassign/${toolId}`, { method: 'DELETE' });
+  if (resp.ok) { window.location.reload(); }
+  else { const e = await resp.json().catch(()=>({})); alert('Failed: '+(e.detail||resp.statusText)); }
+}
+
+async function deleteTool(toolName) {
+  if (!confirm(`Delete tool ${toolName}?`)) return;
+  const resp = await fetch(`/api/agents/${agentSlug}/tools/${toolName}`, { method: 'DELETE' });
+  if (resp.ok) { window.location.reload(); }
+  else { const e = await resp.json().catch(()=>({})); alert('Failed: '+(e.detail||resp.statusText)); }
 }
 
 async function assignGlobalTool() {
