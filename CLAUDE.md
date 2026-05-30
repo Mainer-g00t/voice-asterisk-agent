@@ -75,7 +75,38 @@ Flows define multi-step branching call logic as a node graph. The engine is a st
 
 **Node types:** `conversation` | `say` | `gather_dtmf` | `transfer` | `webhook` | `set_variable` | `condition` | `end`
 
+**Node config fields (quick ref):**
+- `conversation`: `system_prompt`, `greeting`, `silence_timeout_seconds`
+- `say`: `message`
+- `gather_dtmf`: `prompt` (optional TTS before waiting), `dtmf_timeout` (seconds, default 10)
+- `transfer`: `destination`, `dialplan_context` (default `"default"`)
+- `webhook`: `url`, `timeout` (seconds, default 10) — POSTs `{call_uuid, current_node_id, state}`, stores response in `last_webhook_result`
+- `set_variable`: `variable_name`, `value` — writes into `state.variables`
+- `condition`: `variable_name` — silent branch, draw one `variable_equals` edge per value + default
+
 **Edge condition types:** `keyword_matched` | `turn_count_gte` | `dtmf_digit` | `tool_result` | `variable_equals` | `silence_timeout` | `webhook_field` | `default`
+
+**Edge condition parameters:**
+- `keyword_matched`: `words: ["bye", "stop"]`
+- `turn_count_gte`: `n: 5`
+- `dtmf_digit`: `digit: "1"`
+- `tool_result`: `tool: "name"`, `field: "key"`, `value: "expected"`
+- `variable_equals`: `var: "last_dtmf"`, `value: "1"` — checks built-in state keys OR user-defined variables
+- `webhook_field`: `field: "action"`, `value: "transfer"`
+- `silence_timeout`, `default`: no parameters
+
+**Flow state variables** (all readable via `variable_equals` / `condition` node):
+
+Built-in (auto-updated by the engine):
+- `turn_count` — incremented after every agent response
+- `last_dtmf` — last keypad digit pressed (`"1"`, `"*"`, etc.)
+- `last_transcript` — full STT text of the last user turn
+- `last_webhook_result` — full JSON response from the last `webhook` node (stringified)
+- `last_tool_results` — `{tool_name: result}` map after any tool call
+- `last_intent` — intent label if intent detection is used
+- `call_status` — `"no_answer"` or `"busy"` for unanswered outbound calls
+
+User-defined (via `set_variable` nodes, stored in `state.variables`): any key you choose. User-defined take precedence over built-ins on name collision.
 
 **Flow definition shape** (stored as JSONB in `flows.definition`):
 ```json
