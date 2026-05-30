@@ -25,3 +25,7 @@ env/
 .idea/
 .vscode/
 *.swp
+
+# Flow editor build artifacts (built by `make build-frontend` or Docker)
+config-api/flow-editor/node_modules/
+# static/flow-editor is committed so Docker image doesn't need Node at runtime

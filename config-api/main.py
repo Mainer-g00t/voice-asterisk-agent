@@ -37,6 +37,10 @@ app = FastAPI(title="Voice Agent Config API", lifespan=lifespan)
 # Shared template engine — routers import this
 templates = Jinja2Templates(directory="templates")
 
+# Static files — flow editor JS/CSS bundle
+if os.path.isdir("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
 app.include_router(agents.router,   prefix="/api/agents",   tags=["agents"])
 app.include_router(tools.router,    prefix="/api/tools",    tags=["tools"])
 app.include_router(routes.router,   prefix="/api/routes",   tags=["routes"])

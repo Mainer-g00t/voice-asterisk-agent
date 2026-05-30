@@ -26,6 +26,8 @@
 {% endif %}
 
 <form method="post" action="{{ '/admin/flows/' + flow.id|string + '/edit' if flow else '/admin/flows/new' }}">
+
+  <!-- Name + Description -->
   <div class="row g-3 mb-3">
     <div class="col-md-4">
       <label class="form-label fw-semibold">Flow Name</label>
@@ -39,34 +41,30 @@
     </div>
   </div>
 
+  <!-- Visual Flow Editor -->
   <div class="mb-3">
-    <div class="d-flex justify-content-between align-items-end mb-1">
-      <label class="form-label fw-semibold mb-0">Flow Definition <span class="badge bg-secondary">JSON</span></label>
-      <div>
-        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="formatJson()">Format</button>
-        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="insertExample(event)">Insert Example ▾</button>
-        <div id="exampleMenu" class="dropdown-menu p-1" style="display:none;position:absolute;z-index:1000;min-width:220px">
-          <button class="dropdown-item small" onclick="loadExample('keyword_end')">keyword → end</button>
-          <button class="dropdown-item small" onclick="loadExample('dtmf_branch')">DTMF branch (1=sales, 2=support)</button>
-          <button class="dropdown-item small" onclick="loadExample('webhook_branch')">webhook branch</button>
-          <button class="dropdown-item small" onclick="loadExample('multi_node')">multi-node (say → conversation → transfer)</button>
-        </div>
-      </div>
+    <div class="d-flex justify-content-between align-items-end mb-2">
+      <label class="form-label fw-semibold mb-0">Flow Canvas</label>
+      <span class="text-muted small">Drag nodes · Draw connections by pulling from ● · Click to edit · Select + Delete key removes</span>
     </div>
-    <textarea name="definition_json" id="definitionJson" class="form-control mono"
-              rows="28" spellcheck="false" style="font-size:0.82rem">{{ definition_json }}</textarea>
-    <div class="form-text">
-      💡 <strong>entry_node_id</strong> sets which node runs first.
-      Each node has <code>id</code>, <code>type</code>, <code>label</code>, <code>config</code>.
-      Edges have <code>source</code>, <code>target</code>, <code>condition</code>
-      (<code>{"type": "keyword_matched", "words": ["bye"]}</code>).
-      The first matching edge wins; use <code>{"type": "default"}</code> as fallback.
-    </div>
+
+    <!-- React Flow mounts here; reads initial definition from data attr -->
+    <div
+      id="flow-editor-root"
+      data-definition="{{ definition_json | replace('"', '&quot;') }}"
+    ></div>
+
+    <!-- Textarea kept in sync by React app, submitted with the form -->
+    <!-- Hidden by default; "View JSON" button reveals it -->
+    <textarea name="definition_json" id="definitionJson"
+              style="display:none;font-family:monospace;font-size:0.78rem;width:100%;height:400px;margin-top:8px;border:1px solid #d1d5db;border-radius:6px;padding:8px"
+              spellcheck="false">{{ definition_json }}</textarea>
   </div>
 
-  <div class="d-flex gap-2">
+  <div class="d-flex gap-2 align-items-center flex-wrap">
     <button class="btn btn-primary">{{ "Save Flow" if flow else "Create Flow" }}</button>
     <a href="/admin/flows" class="btn btn-outline-secondary">Cancel</a>
+    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleJson(this)">View JSON ▼</button>
     {% if flow %}
     <form method="post" action="/admin/flows/{{ flow.id }}/delete" class="ms-auto"
           onsubmit="return confirm('Deactivate this flow?')">
@@ -76,105 +74,15 @@
   </div>
 </form>
 
+<link rel="stylesheet" href="/static/flow-editor/index.css">
+<script type="module" src="/static/flow-editor/index.js"></script>
+
 <script>
-function formatJson() {
-  const ta = document.getElementById('definitionJson');
-  try {
-    ta.value = JSON.stringify(JSON.parse(ta.value), null, 2);
-  } catch(e) { alert('Invalid JSON: ' + e.message); }
+function toggleJson(btn) {
+  const ta = document.getElementById('definitionJson')
+  const hidden = ta.style.display === 'none'
+  ta.style.display = hidden ? 'block' : 'none'
+  btn.textContent = hidden ? 'Hide JSON ▲' : 'View JSON ▼'
 }
-
-function insertExample(e) {
-  e.preventDefault();
-  const menu = document.getElementById('exampleMenu');
-  if (menu.style.display === 'none') {
-    const btn = e.currentTarget;
-    const rect = btn.getBoundingClientRect();
-    menu.style.top = (rect.bottom + window.scrollY) + 'px';
-    menu.style.left = rect.left + 'px';
-    menu.style.display = 'block';
-    document.addEventListener('click', () => menu.style.display = 'none', {once: true});
-  } else {
-    menu.style.display = 'none';
-  }
-}
-
-const EXAMPLES = {
-  keyword_end: {
-    entry_node_id: "n1",
-    nodes: [
-      {id:"n1", type:"conversation", label:"Main", config:{
-        system_prompt:"You are a helpful assistant. Keep responses brief.",
-        greeting:"Hello! How can I help you today?"
-      }},
-      {id:"n2", type:"end", label:"End", config:{}}
-    ],
-    edges: [
-      {id:"e1", source:"n1", target:"n2", condition:{type:"keyword_matched", words:["goodbye","bye","hang up"]}},
-      {id:"e2", source:"n1", target:"n2", condition:{type:"turn_count_gte", n:15}}
-    ]
-  },
-  dtmf_branch: {
-    entry_node_id: "n1",
-    nodes: [
-      {id:"n1", type:"say", label:"IVR Greeting", config:{message:"Press 1 for sales, press 2 for support."}},
-      {id:"n2", type:"gather_dtmf", label:"Wait for digit", config:{dtmf_timeout:10}},
-      {id:"n3", type:"conversation", label:"Sales", config:{system_prompt:"You are a sales agent. Be enthusiastic.", greeting:"Hi! Welcome to sales. How can I help you?"}},
-      {id:"n4", type:"conversation", label:"Support", config:{system_prompt:"You are a support agent. Be empathetic.", greeting:"Hi! I'm here to help. What's the issue?"}},
-      {id:"n5", type:"end", label:"End", config:{}}
-    ],
-    edges: [
-      {id:"e1", source:"n1", target:"n2", condition:{type:"default"}},
-      {id:"e2", source:"n2", target:"n3", condition:{type:"dtmf_digit", digit:"1"}},
-      {id:"e3", source:"n2", target:"n4", condition:{type:"dtmf_digit", digit:"2"}},
-      {id:"e4", source:"n2", target:"n5", condition:{type:"silence_timeout"}},
-      {id:"e5", source:"n3", target:"n5", condition:{type:"keyword_matched", words:["goodbye","bye"]}},
-      {id:"e6", source:"n4", target:"n5", condition:{type:"keyword_matched", words:["goodbye","bye"]}}
-    ]
-  },
-  webhook_branch: {
-    entry_node_id: "n1",
-    nodes: [
-      {id:"n1", type:"conversation", label:"Collect Info", config:{system_prompt:"Ask the user for their account number.", greeting:"Hi! Please tell me your account number."}},
-      {id:"n2", type:"webhook", label:"Check Account", config:{url:"http://tools-server:8100/check_account", timeout:10}},
-      {id:"n3", type:"conversation", label:"Eligible", config:{system_prompt:"The customer is eligible. Help them proceed.", greeting:"Great news! You are eligible."}},
-      {id:"n4", type:"conversation", label:"Not Eligible", config:{system_prompt:"The customer is not eligible. Apologize and explain.", greeting:"I'm sorry, you are not eligible at this time."}},
-      {id:"n5", type:"end", label:"End", config:{}}
-    ],
-    edges: [
-      {id:"e1", source:"n1", target:"n2", condition:{type:"turn_count_gte", n:2}},
-      {id:"e2", source:"n2", target:"n3", condition:{type:"webhook_field", field:"eligible", value:"true"}},
-      {id:"e3", source:"n2", target:"n4", condition:{type:"default"}},
-      {id:"e4", source:"n3", target:"n5", condition:{type:"keyword_matched", words:["goodbye","bye"]}},
-      {id:"e5", source:"n4", target:"n5", condition:{type:"keyword_matched", words:["goodbye","bye"]}}
-    ]
-  },
-  multi_node: {
-    entry_node_id: "n1",
-    nodes: [
-      {id:"n1", type:"say", label:"Welcome", config:{message:"Welcome to Acme support. Please hold while I connect you to an agent."}},
-      {id:"n2", type:"conversation", label:"Triage", config:{system_prompt:"You are a triage agent. Ask the user to describe their issue briefly.", greeting:"Hi! What's the nature of your issue today?"}},
-      {id:"n3", type:"transfer", label:"Transfer to Human", config:{destination:"operator", dialplan_context:"default"}},
-      {id:"n4", type:"end", label:"End", config:{}}
-    ],
-    edges: [
-      {id:"e1", source:"n1", target:"n2", condition:{type:"default"}},
-      {id:"e2", source:"n2", target:"n3", condition:{type:"keyword_matched", words:["speak to someone","human","agent","representative"]}},
-      {id:"e3", source:"n2", target:"n4", condition:{type:"turn_count_gte", n:6}}
-    ]
-  }
-};
-
-function loadExample(key) {
-  document.getElementById('exampleMenu').style.display = 'none';
-  document.getElementById('definitionJson').value = JSON.stringify(EXAMPLES[key], null, 2);
-}
-
-// Auto-format on load if already valid JSON
-try {
-  const ta = document.getElementById('definitionJson');
-  const parsed = JSON.parse(ta.value);
-  ta.value = JSON.stringify(parsed, null, 2);
-} catch(e) {}
 </script>
 {% endblock %}

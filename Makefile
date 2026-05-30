@@ -1,4 +1,4 @@
-.PHONY: pull up down logs logs-agent logs-tts logs-llm logs-stt logs-asterisk restart cli shell migrate grafana prometheus
+.PHONY: pull up down logs logs-agent logs-tts logs-llm logs-stt logs-asterisk restart cli shell migrate grafana prometheus build-frontend
 
 # Pull latest code + updated base images
 pull:
@@ -51,6 +51,11 @@ grafana:
 
 prometheus:
 	open http://localhost:9091
+
+# Build the React flow editor bundle (output → config-api/static/flow-editor/)
+# The Docker build handles this automatically via multi-stage; run locally after editing flow-editor/src/
+build-frontend:
+	cd config-api/flow-editor && npm ci && npm run build
 
 # Apply all pending SQL migrations to the running Postgres container
 # Usage: make migrate  (safe to run multiple times — Postgres ignores IF NOT EXISTS)
