@@ -2,7 +2,7 @@
 -- Adds flow definitions, per-call execution state, and event audit log.
 -- Flows are opt-in: existing agents and routes are unchanged.
 
-CREATE TABLE flows (
+CREATE TABLE IF NOT EXISTS flows (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name        TEXT NOT NULL,
     description TEXT,
@@ -21,7 +21,7 @@ CREATE TABLE flows (
 );
 
 -- Per-call execution record — one row per call that uses a flow
-CREATE TABLE flow_executions (
+CREATE TABLE IF NOT EXISTS flow_executions (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     flow_id         UUID NOT NULL REFERENCES flows(id),
     call_uuid       TEXT UNIQUE,               -- links to call_logs.call_uuid
@@ -34,11 +34,11 @@ CREATE TABLE flow_executions (
     ended_at        TIMESTAMPTZ
 );
 
-CREATE INDEX idx_flow_executions_call ON flow_executions(call_uuid);
-CREATE INDEX idx_flow_executions_flow ON flow_executions(flow_id);
+CREATE INDEX IF NOT EXISTS idx_flow_executions_call ON flow_executions(call_uuid);
+CREATE INDEX IF NOT EXISTS idx_flow_executions_flow ON flow_executions(flow_id);
 
 -- Audit log — every node entry, edge traversal, and event received
-CREATE TABLE flow_events (
+CREATE TABLE IF NOT EXISTS flow_events (
     id           BIGSERIAL PRIMARY KEY,
     execution_id UUID NOT NULL REFERENCES flow_executions(id),
     ts           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -50,7 +50,7 @@ CREATE TABLE flow_events (
     data         JSONB
 );
 
-CREATE INDEX idx_flow_events_execution ON flow_events(execution_id, ts);
+CREATE INDEX IF NOT EXISTS idx_flow_events_execution ON flow_events(execution_id, ts);
 
 -- Attach an optional flow to a phone route (inbound calls)
 ALTER TABLE phone_routes ADD COLUMN IF NOT EXISTS flow_id UUID REFERENCES flows(id);

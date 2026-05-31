@@ -1,5 +1,5 @@
 -- ── agents ───────────────────────────────────────────────────────────────────
-CREATE TABLE agents (
+CREATE TABLE IF NOT EXISTS agents (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     slug             TEXT NOT NULL UNIQUE,
     display_name     TEXT NOT NULL,
@@ -11,7 +11,7 @@ CREATE TABLE agents (
 );
 
 -- ── provider_configs ──────────────────────────────────────────────────────────
-CREATE TABLE provider_configs (
+CREATE TABLE IF NOT EXISTS provider_configs (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id      UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     provider_type TEXT NOT NULL CHECK (provider_type IN ('stt', 'llm', 'tts')),
@@ -23,7 +23,7 @@ CREATE TABLE provider_configs (
 
 -- ── tool_definitions ──────────────────────────────────────────────────────────
 -- Tool schemas go in DB; handlers stay in Python code (keyed by handler_type).
-CREATE TABLE tool_definitions (
+CREATE TABLE IF NOT EXISTS tool_definitions (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id        UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     tool_name       TEXT NOT NULL,
@@ -37,7 +37,7 @@ CREATE TABLE tool_definitions (
 
 -- ── specialist_configs ────────────────────────────────────────────────────────
 -- Replaces the hardcoded _SPECIALISTS dict in orchestrator.py.
-CREATE TABLE specialist_configs (
+CREATE TABLE IF NOT EXISTS specialist_configs (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id        UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     specialist_key  TEXT NOT NULL,
@@ -50,7 +50,7 @@ CREATE TABLE specialist_configs (
 
 -- ── config_versions ───────────────────────────────────────────────────────────
 -- Append-only audit log; enables rollback by re-pushing a snapshot to Redis.
-CREATE TABLE config_versions (
+CREATE TABLE IF NOT EXISTS config_versions (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id   UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     snapshot   JSONB NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE config_versions (
 );
 
 -- ── system_settings ───────────────────────────────────────────────────────────
-CREATE TABLE system_settings (
+CREATE TABLE IF NOT EXISTS system_settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
@@ -67,7 +67,8 @@ CREATE TABLE system_settings (
 INSERT INTO system_settings VALUES
     ('default_stt_provider', 'local'),
     ('default_llm_provider', 'local'),
-    ('default_tts_provider', 'local');
+    ('default_tts_provider', 'local')
+ON CONFLICT (key) DO NOTHING;
 
 -- ── updated_at trigger ────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION set_updated_at()
@@ -78,7 +79,7 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER agents_updated_at
+CREATE OR REPLACE TRIGGER agents_updated_at
     BEFORE UPDATE ON agents
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -102,35 +103,47 @@ INSERT INTO agents (slug, display_name, system_prompt, greeting_trigger) VALUES
 
 ('orchestrator', 'Hotel Concierge (Orchestrator)',
  'You are the front-desk concierge at a luxury hotel, answering calls from guests. Listen to what the guest needs, then use the route_to_specialist tool to get a response from the right specialist — do not answer directly. Specialists handle: ''room_service'' for food and drink orders, ''maintenance'' for room problems (broken AC, no hot water, leaks, etc.), ''concierge'' for local recommendations, taxi bookings, or any other request. Once the specialist replies, relay their answer naturally in one or two sentences. Never use bullet points or markdown.',
- 'A hotel guest is calling the front desk. Please answer the phone warmly.');
+ 'A hotel guest is calling the front desk. Please answer the phone warmly.')
+ON CONFLICT (slug) DO NOTHING;
 
 -- Provider configs for orchestrator (needs Anthropic)
 INSERT INTO provider_configs (agent_id, provider_type, provider_name, model)
-SELECT id, 'llm', 'anthropic', 'claude-haiku-4-5-20251001' FROM agents WHERE slug = 'orchestrator';
+SELECT id, 'llm', 'anthropic', 'claude-haiku-4-5-20251001' FROM agents WHERE slug = 'orchestrator'
+ON CONFLICT (agent_id, provider_type) DO NOTHING;
 
 -- Tool definition for orchestrator
+-- Uses WHERE NOT EXISTS instead of ON CONFLICT because migration 005 replaces
+-- the UNIQUE(agent_id, tool_name) constraint with a partial index.
 INSERT INTO tool_definitions (agent_id, tool_name, handler_type, description, parameters, required_params)
 SELECT
-    id,
+    a.id,
     'route_to_specialist',
     'specialist_router',
     'Route the caller''s request to the appropriate specialist subagent. Call this once you understand what the guest needs.',
     '{"specialist": {"type": "string", "enum": ["room_service", "maintenance", "concierge"], "description": "Which specialist to delegate to."}, "query": {"type": "string", "description": "The guest''s request, quoted or summarized."}}',
     ARRAY['specialist', 'query']
-FROM agents WHERE slug = 'orchestrator';
+FROM agents a
+WHERE a.slug = 'orchestrator'
+  AND NOT EXISTS (
+      SELECT 1 FROM tool_definitions td
+      WHERE td.agent_id = a.id AND td.tool_name = 'route_to_specialist'
+  );
 
 -- Specialist configs for orchestrator
 INSERT INTO specialist_configs (agent_id, specialist_key, display_name, system_prompt, sort_order)
 SELECT id, 'room_service', 'Room Service',
  'You are a room service specialist at a luxury hotel. A guest has been routed to you because they want food or drinks. Acknowledge their order, confirm it clearly, and give an estimated delivery time of 20-30 minutes. Be warm and professional. Two sentences maximum. No markdown.',
- 0 FROM agents WHERE slug = 'orchestrator';
+ 0 FROM agents WHERE slug = 'orchestrator'
+ON CONFLICT (agent_id, specialist_key) DO NOTHING;
 
 INSERT INTO specialist_configs (agent_id, specialist_key, display_name, system_prompt, sort_order)
 SELECT id, 'maintenance', 'Maintenance',
  'You are the hotel maintenance coordinator. A guest has been routed to you because of a room issue. Apologize sincerely for the inconvenience, acknowledge the specific problem, and promise a technician will arrive within 15 minutes. Two sentences maximum. No markdown.',
- 1 FROM agents WHERE slug = 'orchestrator';
+ 1 FROM agents WHERE slug = 'orchestrator'
+ON CONFLICT (agent_id, specialist_key) DO NOTHING;
 
 INSERT INTO specialist_configs (agent_id, specialist_key, display_name, system_prompt, sort_order)
 SELECT id, 'concierge', 'Concierge',
  'You are a knowledgeable hotel concierge. A guest has been routed to you for local recommendations or general assistance. Give a brief, genuinely helpful answer based on their request. Two sentences maximum. No markdown.',
- 2 FROM agents WHERE slug = 'orchestrator';
+ 2 FROM agents WHERE slug = 'orchestrator'
+ON CONFLICT (agent_id, specialist_key) DO NOTHING;

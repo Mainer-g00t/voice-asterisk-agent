@@ -1,4 +1,4 @@
-CREATE TABLE call_logs (
+CREATE TABLE IF NOT EXISTS call_logs (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     call_uuid        TEXT NOT NULL UNIQUE,
     agent_slug       TEXT NOT NULL,
@@ -15,5 +15,5 @@ CREATE TABLE call_logs (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX call_logs_agent_slug_idx ON call_logs (agent_slug);
-CREATE INDEX call_logs_started_at_idx ON call_logs (started_at DESC);
+CREATE INDEX IF NOT EXISTS call_logs_agent_slug_idx ON call_logs (agent_slug);
+CREATE INDEX IF NOT EXISTS call_logs_started_at_idx ON call_logs (started_at DESC);
