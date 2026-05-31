@@ -1,4 +1,9 @@
-.PHONY: pull up down logs logs-agent logs-tts logs-llm logs-stt logs-asterisk restart cli shell migrate grafana prometheus build-frontend
+.PHONY: pull up down logs logs-agent logs-tts logs-llm logs-stt logs-asterisk restart cli shell migrate grafana prometheus build-frontend test
+
+# Run unit tests (no Docker required)
+# Requires: pip3 install pytest docker loguru voiceai-common (or: pip3 install -e packages/)
+test:
+	python3 -m pytest tests/ -v
 
 # Pull latest code + updated base images
 pull:

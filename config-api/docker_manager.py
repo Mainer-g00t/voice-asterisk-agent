@@ -8,6 +8,8 @@ Mounts required in docker-compose.yml:
       - .:/workspace                              # project root, writable
 """
 
+from __future__ import annotations
+
 import os
 import re
 
@@ -160,7 +162,7 @@ def _validate_route_fields(did: str, slug: str) -> None:
         raise ValueError(f"Invalid agent_slug '{slug}': only lowercase letters, digits, and hyphens are allowed")
 
 
-def write_extensions_conf(routes: list[dict], default_slug: str = "basic") -> str:
+def write_extensions_conf(routes: list[dict], default_slug: str = "basic", workspace: str | None = None) -> str:
     """
     Generate and write extensions.conf from active phone routes.
     Returns the generated content.
@@ -232,7 +234,7 @@ def write_extensions_conf(routes: list[dict], default_slug: str = "basic") -> st
     ]
 
     content = "\n".join(lines) + "\n"
-    path = os.path.join(WORKSPACE, "asterisk", "extensions.conf")
+    path = os.path.join(workspace or WORKSPACE, "asterisk", "extensions.conf")
     with open(path, "w") as f:
         f.write(content)
     logger.info(f"Wrote extensions.conf ({len(routes)} routes) to {path}")
